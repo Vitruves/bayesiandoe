@@ -42,6 +42,7 @@ setup(
         "botorch",
         "gpytorch",
         "torch",
+        "pytest",
         "gpyopt",
         "zipp",
     ],

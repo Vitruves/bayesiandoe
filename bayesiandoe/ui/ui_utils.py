@@ -228,6 +228,10 @@ def update_prior_param_buttons(self):
     self.param_buttons_layout.addWidget(help_btn)
 
 def update_best_result_label(self):
+    # Skip if best_result_label doesn't exist
+    if not hasattr(self, 'best_result_label'):
+        return
+        
     if not self.model.experiments:
         self.best_result_label.setText("N/A")
         return
@@ -252,7 +256,7 @@ def update_rounding_settings(self):
     
     auto_status = "enabled" if settings.auto_round else "disabled"
     smart_status = "enabled" if settings.smart_rounding else "disabled"
-    log(self, f"-- Rounding settings updated: Auto-round {auto_status}, Precision {settings.rounding_precision}, Smart rounding {smart_status}")
+    log(self, f" Rounding settings updated: Auto-round {auto_status}, Precision {settings.rounding_precision}, Smart rounding {smart_status}")
 
 def update_std_from_confidence(self, confidence):
     param_name = self.prior_param_combo.currentText()

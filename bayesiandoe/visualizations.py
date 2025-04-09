@@ -33,7 +33,7 @@ def plot_optimization_history(model, ax=None):
             
         for i, values in enumerate(data):
             best_values = np.maximum.accumulate(values)
-            ax.plot(x, best_values, marker='', linestyle='--', 
+            ax.plot(x, best_values, marker='', linestyle='', 
                    color=ax.lines[i].get_color(), alpha=0.7)
             
         ax.set_xlabel("Experiment Number")
@@ -452,13 +452,13 @@ def plot_convergence(model, ax=None):
     
     # Set up the plot aesthetics
     ax.set_facecolor('#f8f9fa')
-    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.grid(True, linestyle='', alpha=0.7)
     
     # Mark experiment rounds if available
     if hasattr(model, 'round_start_indices') and model.round_start_indices:
         for idx in model.round_start_indices:
             if 0 < idx < len(scores):
-                ax.axvline(idx + 1, color='#aaaaaa', linestyle='--', alpha=0.5)
+                ax.axvline(idx + 1, color='#aaaaaa', linestyle='', alpha=0.5)
     
     # Plot individual experiment markers, with size based on score
     sizes = [max(20, s * 0.5) for s in scores]
@@ -477,7 +477,7 @@ def plot_convergence(model, ax=None):
     cbar.set_label('Experiment Sequence')
     
     # Plot experiment connecting line
-    ax.plot(x, scores, '--', color='#4285f4', alpha=0.5, linewidth=1)
+    ax.plot(x, scores, '', color='#4285f4', alpha=0.5, linewidth=1)
     
     # Plot the best-so-far scores
     ax.plot(x, best_scores, '-', linewidth=2.5, color='#ea4335', 
@@ -565,7 +565,7 @@ def plot_convergence(model, ax=None):
             y_fit = np.minimum(y_fit, max_possible)
             
             # Plot the convergence curve with confidence regions
-            ax.plot(x_fit, y_fit, '--', color='#34a853', linewidth=2,
+            ax.plot(x_fit, y_fit, '', color='#34a853', linewidth=2,
                   label=f'Predicted Convergence')
                   
             # Calculate the asymptotic value (a + c)
@@ -587,7 +587,7 @@ def plot_convergence(model, ax=None):
                 
                 # Only show if it's a reasonable number
                 if 0 < remaining_rounds < 50:
-                    ax.axvline(required_x, color='#34a853', linestyle='--', alpha=0.5)
+                    ax.axvline(required_x, color='#34a853', linestyle='', alpha=0.5)
                     
                     # Add annotation with arrow
                     ax.annotate(

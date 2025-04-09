@@ -36,11 +36,11 @@ def update_objectives(self):
                 self.model.set_objectives = types.MethodType(set_objectives, self.model)
             
             self.model.set_objectives(objectives)
-            self.log(f"-- Objectives updated: {', '.join(objectives.keys())} - Success")
+            self.log(f" Objectives updated: {', '.join(objectives.keys())} - Success")
         else:
-            self.log("-- No valid objectives found. Please add at least one objective - Error")
+            self.log(" No valid objectives found. Please add at least one objective - Error")
     except Exception as e:
-        self.log(f"-- Failed to update objectives: {str(e)} - Error")
+        self.log(f" Failed to update objectives: {str(e)} - Error")
 
 def show_registry_item_tooltip(self, item, reg_type, category):
     """Show tooltip with detailed properties for registry items"""
@@ -99,7 +99,7 @@ def on_prior_selected(self):
 def update_best_results(self):
     n_best = self.n_best_spin.value()
     self.best_table.update_from_model(self.model, n_best)
-    log(self, f"-- Best results table updated showing top {n_best} results - Success")
+    log(self, f" Best results table updated showing top {n_best} results - Success")
 
 def show_result_details(self):
     selected_items = self.all_results_table.selectedItems()
@@ -214,11 +214,11 @@ def on_param_button_clicked(self, param_name):
                 mean=dialog.result.get("mean"),
                 std=dialog.result.get("std")
             )
-            log(self, f"-- Prior set for {param_name} (mean={dialog.result.get('mean')}, std={dialog.result.get('std')}) - Success")
+            log(self, f" Prior set for {param_name} (mean={dialog.result.get('mean')}, std={dialog.result.get('std')}) - Success")
         else:
             preferences = dialog.result.get("categorical_preferences", {})
             param.categorical_preferences = preferences
-            log(self, f"-- Categorical prior set for {param_name} - Success")
+            log(self, f" Categorical prior set for {param_name} - Success")
             
         update_prior_table(self)
         if self.viz_param_combo.currentText() == param_name:
@@ -231,7 +231,7 @@ def show_parameter_links(self, param_name):
         
     dialog = ParameterLinkDialog(self, self.model, param_name)
     dialog.exec()
-    log(self, f"-- Parameter links updated for {param_name} - Success")
+    log(self, f" Parameter links updated for {param_name} - Success")
 
 def show_design_method_help(self):
     """Show a dialog to help users choose the best design method."""
@@ -248,16 +248,16 @@ def show_design_method_help(self):
             if selected_row >= 0:
                 method = selector.results_table.item(selected_row, 0).text()
                 self.design_method_combo.setCurrentText(method)
-                self.log(f"-- Design method updated to: {method}")
+                self.log(f" Design method updated to: {method}")
                 # Update the model's design method
                 self.model.design_method = method.lower()
             else:
                 # Default to BoTorch as the highest rated method
                 self.design_method_combo.setCurrentText("BoTorch")
                 self.model.design_method = "botorch"
-                self.log("-- Design method updated to: BoTorch (default recommended)")
+                self.log(" Design method updated to: BoTorch (default recommended)")
     except Exception as e:
-        self.log(f"-- Error showing design method help: {str(e)} - Error")
+        self.log(f" Error showing design method help: {str(e)} - Error")
         # Show a simple message box as fallback and set BoTorch as default
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.information(
@@ -276,4 +276,4 @@ def show_design_method_help(self):
         # Set BoTorch as the default
         self.design_method_combo.setCurrentText("BoTorch")
         self.model.design_method = "botorch"
-        self.log("-- Design method set to: BoTorch (recommended default)") 
+        self.log(" Design method set to: BoTorch (recommended default)") 

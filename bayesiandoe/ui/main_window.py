@@ -103,7 +103,7 @@ class BayesianDOEApp(QMainWindow):
         self.create_status_bar()
         self.create_central_widget()
         
-        self.log("-- Application started successfully")
+        self.log(" Application started successfully")
         
     def create_menu_bar(self):
         menu_bar = self.menuBar()
@@ -217,7 +217,7 @@ class BayesianDOEApp(QMainWindow):
         from PySide6.QtWidgets import QMessageBox
         
         # Log the error
-        self.log(f"-- ERROR: {error_msg} - Failed")
+        self.log(f" ERROR: {error_msg} - Failed")
         
         # Show error dialog with details
         error_box = QMessageBox(self)
@@ -247,36 +247,43 @@ class BayesianDOEApp(QMainWindow):
     def update_result_tables(self):
         """Update all result tables when a result is added or modified.
         This is called after direct table editing or through the add_result_for_selected method."""
-        # Update the best results table
-        if hasattr(self, 'best_table'):
-            self.best_table.update_from_model(self.model, self.n_best_spin.value())
-            
-        # Update the all results table
-        if hasattr(self, 'all_results_table'):
-            self.all_results_table.update_from_model(self.model)
-            
-        # Update the best result label
-        update_best_result_label(self)
-            
-        # Update counts
-        if hasattr(self, 'results_count_label'):
-            completed_count = len(self.model.experiments)
-            planned_count = len(self.model.planned_experiments)
-            self.results_count_label.setText(f"{completed_count} / {planned_count}")
-            
-        # Update plots if we're on the results or analysis tab
-        current_tab = self.tab_widget.currentIndex()
-        if current_tab == 3:  # Results tab
-            update_results_plot(self)
-        elif current_tab == 4:  # Analysis tab
-            if hasattr(self, 'convergence_canvas'):
-                update_convergence_plot(self)
-            if hasattr(self, 'correlation_canvas'):
-                update_correlation_plot(self)
+        try:
+            # Update the best results table
+            if hasattr(self, 'best_table'):
+                self.best_table.update_from_model(self.model, self.n_best_spin.value() if hasattr(self, 'n_best_spin') else 5)
                 
-        # Log success message (only if not already logged from the source)
-        if not hasattr(self, '_result_updated_logged') or not self._result_updated_logged:
-            self.log("-- Result tables updated - Success")
-            self._result_updated_logged = True
-            # Reset the flag after a short delay
-            QTimer.singleShot(100, lambda: setattr(self, '_result_updated_logged', False))
+            # Update the all results table
+            if hasattr(self, 'all_results_table'):
+                self.all_results_table.update_from_model(self.model)
+                
+            # Update the best result label - make sure it has conditional checks inside
+            update_best_result_label(self)
+                
+            # Update counts
+            if hasattr(self, 'results_count_label'):
+                completed_count = len(self.model.experiments)
+                planned_count = len(self.model.planned_experiments)
+                self.results_count_label.setText(f"{completed_count} / {planned_count}")
+                
+            # Update plots if we're on the results or analysis tab
+            if hasattr(self, 'tab_widget'):
+                current_tab = self.tab_widget.currentIndex()
+                if current_tab == 3:  # Results tab
+                    update_results_plot(self)
+                elif current_tab == 4:  # Analysis tab
+                    if hasattr(self, 'convergence_canvas'):
+                        update_convergence_plot(self)
+                    if hasattr(self, 'correlation_canvas'):
+                        update_correlation_plot(self)
+                    
+            # Log success message (only if not already logged from the source)
+            if not hasattr(self, '_result_updated_logged') or not self._result_updated_logged:
+                self.log("-- Result tables updated - Success")
+                self._result_updated_logged = True
+                # Reset the flag after a short delay
+                QTimer.singleShot(100, lambda: setattr(self, '_result_updated_logged', False))
+                
+        except Exception as e:
+            import traceback
+            print(f"Error updating result tables: {e}")
+            print(traceback.format_exc())

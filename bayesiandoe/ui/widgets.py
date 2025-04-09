@@ -30,12 +30,85 @@ class SplashScreen(QSplashScreen):
         
         self.progress = 0
         self.counter = 0
-        self.duration_ms = 4000
+        self.duration_ms = 3000  # Minimum 3 seconds display time
         self.start_time = time.time()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
         self.timer.start(30)
+        
+        # Initialize system details
+        self.system_details = "Detecting system..."
+        
+        # Initialize packages to load
+        self.packages_to_load = [
+            ("numpy", "Loading numerical routines"),
+            ("pandas", "Loading data structures"),
+            ("matplotlib", "Loading visualization libraries"),
+            ("scipy", "Loading scientific computing libraries"),
+            ("optuna", "Loading optimization framework"),
+            ("sklearn", "Loading machine learning libraries"),
+            ("torch", "Loading deep learning libraries"),
+            ("PySide6", "Initializing UI components")
+        ]
+        self.current_package_index = 0
+        self.package_loading_complete = False
+        self.loaded_packages = 0
+        self.missing_packages = []
+        
+        # Start package loading thread
+        import threading
+        self.loading_thread = threading.Thread(target=self.load_packages)
+        self.loading_thread.daemon = True
+        self.loading_thread.start()
+        
         self.draw_splash()
+    
+    def load_packages(self):
+        """Background thread to load packages"""
+        # Add system details
+        try:
+            import platform
+            system_info = f"{platform.system()} {platform.release()}"
+            python_version = platform.python_version()
+            self.system_details = f"{system_info} | Python {python_version}"
+        except:
+            self.system_details = "System info unavailable"
+            
+        # Load required packages
+        loaded_count = 0
+        missing_packages = []
+        for i, (package, message) in enumerate(self.packages_to_load):
+            try:
+                self.current_package_index = i
+                start_time = time.time()
+                
+                # Import the package
+                module = __import__(package)
+                
+                # Get version if available
+                try:
+                    version = getattr(module, '__version__', 'unknown')
+                    self.packages_to_load[i] = (package, f"{message} ({version})")
+                except:
+                    pass
+                
+                # Ensure each package load is visible for at least 0.2 seconds
+                elapsed = time.time() - start_time
+                if elapsed < 0.2:
+                    time.sleep(0.2 - elapsed)
+                
+                loaded_count += 1
+            except ImportError:
+                # Track missing packages
+                missing_packages.append(package)
+                # Continue with next package
+                pass
+                
+        # Log results for debugging
+        self.loaded_packages = loaded_count
+        self.missing_packages = missing_packages
+                
+        self.package_loading_complete = True
     
     def showEvent(self, event):
         super().showEvent(event)
@@ -43,10 +116,23 @@ class SplashScreen(QSplashScreen):
         
     def update_progress(self):
         elapsed_time = (time.time() - self.start_time) * 1000
-        self.progress = min(int(elapsed_time / self.duration_ms * 100), 100)
+        
+        # Calculate progress based on package loading and elapsed time
+        if self.package_loading_complete:
+            # If packages are loaded but minimum time not reached, continue progress
+            time_progress = min(int(elapsed_time / self.duration_ms * 100), 100)
+            self.progress = time_progress
+        else:
+            # During package loading, base progress on package index
+            package_progress = int((self.current_package_index + 1) / len(self.packages_to_load) * 80)
+            self.progress = min(package_progress, 80)  # Cap at 80% until complete
+        
         self.counter += 1
         
-        if elapsed_time < self.duration_ms:
+        # Determine if we should continue showing the splash screen
+        should_continue = (elapsed_time < self.duration_ms) or not self.package_loading_complete
+        
+        if should_continue:
             self.draw_splash()
             
             if self.counter % 10 == 0:
@@ -77,6 +163,18 @@ class SplashScreen(QSplashScreen):
         
         self.draw_cyber_progress(painter, rect)
         
+        # Draw current loading message
+        if self.current_package_index < len(self.packages_to_load):
+            _, message = self.packages_to_load[self.current_package_index]
+        else:
+            message = "Finalizing initialization"
+            
+        font = QFont("Helvetica", 14)
+        font.setStyleStrategy(QFont.PreferAntialias)
+        painter.setFont(font)
+        painter.setPen(QColor(0, 220, 200))
+        painter.drawText(rect.adjusted(0, rect.height()*0.78 + 30, 0, 0), Qt.AlignHCenter | Qt.AlignTop, message)
+        
         font = QFont("Helvetica", 16)
         font.setStyleStrategy(QFont.PreferAntialias)
         painter.setFont(font)
@@ -84,48 +182,93 @@ class SplashScreen(QSplashScreen):
         
         painter.drawText(rect.adjusted(20, 0, 0, -15), Qt.AlignLeft | Qt.AlignBottom, "v1.0.5")
         painter.drawText(rect.adjusted(0, 0, -20, -15), Qt.AlignRight | Qt.AlignBottom, "© 2025 Johan H.G. Natter")
-        painter.drawText(rect.adjusted(0, 0, 0, -15), Qt.AlignHCenter | Qt.AlignBottom, "")
+        
+        # Show system details
+        font = QFont("Helvetica", 12)
+        font.setStyleStrategy(QFont.PreferAntialias)
+        painter.setFont(font)
+        painter.setPen(QColor(120, 140, 140))
+        painter.drawText(rect.adjusted(0, 0, 0, -40), Qt.AlignHCenter | Qt.AlignBottom, self.system_details)
+        
+        # Show loading stats in final phase
+        if self.package_loading_complete:
+            stats_text = f"Loaded {self.loaded_packages}/{len(self.packages_to_load)} packages"
+            painter.drawText(rect.adjusted(0, 0, 0, -60), Qt.AlignHCenter | Qt.AlignBottom, stats_text)
         
         painter.end()
         self.setPixmap(self.splash_pix)
         
     def draw_molecular_background(self, painter, rect):
-        painter.setPen(QPen(QColor(40, 60, 65, 150), 1.2))
-        
+        # Use deterministic randomness for structure but make animation based on counter
+        # This creates a pulsing/animated effect while keeping structure consistent
         random.seed(42)
         
+        # Generate nodes (atoms)
         nodes = []
         for i in range(15):
             x = random.randint(50, rect.width() - 50)
             y = random.randint(50, rect.height() - 50)
             r = random.randint(5, 12)
-            nodes.append((x, y, r))
             
-            color = QColor(
-                random.randint(30, 70),
-                random.randint(120, 200),
-                random.randint(150, 210),
-                100
-            )
+            # Add a subtle oscillation effect
+            phase = (self.counter + i * 15) % 360
+            pulse = 0.2 * np.sin(np.radians(phase))
+            r_animated = r * (1.0 + pulse)
+            
+            nodes.append((x, y, r_animated))
+            
+            # Use different colors based on package loading progress
+            if not self.package_loading_complete:
+                # Blue-cyan scheme during loading
+                color = QColor(
+                    random.randint(30, 60),
+                    random.randint(100, 180),
+                    random.randint(180, 220),
+                    100 + int(20 * pulse)  # Make opacity pulse too
+                )
+            else:
+                # Green-cyan scheme when complete
+                color = QColor(
+                    random.randint(30, 70),
+                    random.randint(160, 220),
+                    random.randint(180, 210),
+                    100 + int(20 * pulse)
+                )
+                
             painter.setPen(Qt.NoPen)
             painter.setBrush(color)
-            painter.drawEllipse(x - r, y - r, r*2, r*2)
+            painter.drawEllipse(x - r_animated, y - r_animated, r_animated*2, r_animated*2)
             
-        painter.setPen(QPen(QColor(70, 90, 95, 70), 1.2))
+        # Draw bonds between atoms
+        edge_color = QColor(70, 100, 180, 70) if not self.package_loading_complete else QColor(70, 180, 160, 70)
+        painter.setPen(QPen(edge_color, 1.2))
+        
         for i in range(len(nodes)):
             for j in range(i+1, len(nodes)):
+                # Use deterministic random for stable structure
+                bond_seed = i * 1000 + j
+                random.seed(bond_seed)
                 if random.random() < 0.4:
                     x1, y1, _ = nodes[i]
                     x2, y2, _ = nodes[j]
+                    
+                    # Add a subtle pulse effect to bonds
+                    phase = (self.counter * 2 + bond_seed) % 360
+                    pulse_alpha = int(40 + 30 * np.sin(np.radians(phase)))
+                    edge_color.setAlpha(pulse_alpha)
+                    painter.setPen(QPen(edge_color, 1.2))
+                    
                     painter.drawLine(x1, y1, x2, y2)
         
-        painter.setPen(QPen(QColor(40, 60, 70, 40), 0.8))
+        # Draw background grid
+        grid_color = QColor(40, 60, 80, 40) if not self.package_loading_complete else QColor(40, 70, 60, 40)
+        painter.setPen(QPen(grid_color, 0.8))
         step = 30
         for x in range(0, rect.width(), step):
             painter.drawLine(x, 0, x, rect.height())
         for y in range(0, rect.height(), step):
             painter.drawLine(0, y, rect.width(), y)
-            
+        
     def draw_cyber_progress(self, painter, rect):
         bar_width = rect.width() * 0.6
         bar_height = 14
@@ -136,6 +279,7 @@ class SplashScreen(QSplashScreen):
         segments = 20
         seg_width = bar_width / segments
         
+        # Draw background segments
         for i in range(segments):
             color = QColor(25, 35, 45) if i % 2 == 0 else QColor(30, 40, 50)
             painter.setPen(Qt.NoPen)
@@ -144,27 +288,42 @@ class SplashScreen(QSplashScreen):
             seg_x = x + (i * seg_width)
             painter.drawRect(seg_x, y, seg_width - 1, bar_height)
             
+        # Calculate filled segments
         filled_segments = int((self.progress / 100) * segments)
         
+        # Determine color based on loading state
+        if self.package_loading_complete:
+            color1 = QColor(0, 220, 200)  # Success green-cyan
+            color2 = QColor(0, 200, 180)
+        else:
+            color1 = QColor(0, 180, 255)  # Loading blue
+            color2 = QColor(0, 150, 220)
+            
+        # Draw filled segments
         for i in range(filled_segments):
-            color = QColor(0, 220, 200) if i % 2 == 0 else QColor(0, 200, 180)
+            color = color1 if i % 2 == 0 else color2
             painter.setPen(Qt.NoPen)
             painter.setBrush(color)
             
             seg_x = x + (i * seg_width)
             painter.drawRect(seg_x, y, seg_width - 1, bar_height)
             
+            # Add lighting effect
             painter.setPen(QPen(QColor(220, 255, 255, 150), 1))
             painter.drawLine(seg_x, y, seg_x + seg_width - 1, y)
             
+        # Draw progress text
         font = QFont("Helvetica", 13)
         font.setLetterSpacing(QFont.AbsoluteSpacing, 1.2)
         painter.setFont(font)
         
+        # Shadow for text
         painter.setPen(QColor(0, 0, 0, 100))
         painter.drawText(QRect(x + 2, y - 30 + 2, bar_width, 25), Qt.AlignCenter, f"INITIALIZING SYSTEM {self.progress}%")
         
-        painter.setPen(QColor(0, 220, 200))
+        # Main text
+        text_color = QColor(0, 220, 200) if self.package_loading_complete else QColor(0, 180, 255)
+        painter.setPen(text_color)
         painter.drawText(QRect(x, y - 30, bar_width, 25), Qt.AlignCenter, f"INITIALIZING SYSTEM {self.progress}%")
 
 class ParameterTable(QTableWidget):
@@ -407,7 +566,7 @@ class ExperimentTable(QTableWidget):
                 parent.update_result_tables()
                 
             # Log the update
-            self.log(f"-- Added result for experiment #{exp_id+1}: {objective_name}={result_value*100:.2f}% - Success")
+            self.log(f" Added result for experiment #{exp_id+1}: {objective_name}={result_value*100:.2f}% - Success")
                 
         except Exception as e:
             import traceback
@@ -485,7 +644,7 @@ class ExperimentTable(QTableWidget):
                     separator_row = self.rowCount()
                     self.insertRow(separator_row)
                     
-                    separator_item = QTableWidgetItem(f"--- Round {round_num} ---")
+                    separator_item = QTableWidgetItem(f"- Round {round_num} -")
                     separator_item.setTextAlignment(Qt.AlignCenter)
                     separator_item.setBackground(QColor(220, 220, 220))
                     separator_item.setForeground(QColor(80, 80, 80))
@@ -650,7 +809,7 @@ class ExperimentTable(QTableWidget):
         if self._prediction_future and not self._prediction_future.done():
             if time.time() - self._prediction_start_time > 5.0:
                 self._prediction_future.cancel()
-                self.log("-- Warning: Prediction calculation timed out - using simple interpolation")
+                self.log(" Warning: Prediction calculation timed out - using simple interpolation")
                 # Fall back to simpler method
                 # [implementation omitted for brevity]
 

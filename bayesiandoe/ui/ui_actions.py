@@ -44,7 +44,7 @@ def add_parameter(self):
         self.experiment_table.update_columns(self.model)
         self.best_table.update_columns(self.model)
         
-        log(self, f"-- Parameter '{param.name}' added - Success")
+        log(self, f" Parameter '{param.name}' added - Success")
 
 def edit_parameter(self):
     selected_items = self.param_table.selectedItems()
@@ -79,7 +79,7 @@ def edit_parameter(self):
             param.units = result.units
             
             self.param_table.update_from_model(self.model)
-            log(self, f"-- Parameter '{name}' updated - Success")
+            log(self, f" Parameter '{name}' updated - Success")
 
 def remove_parameter(self):
     selected_items = self.param_table.selectedItems()
@@ -102,7 +102,7 @@ def remove_parameter(self):
         self.experiment_table.update_columns(self.model)
         self.best_table.update_columns(self.model)
         
-        log(self, f"-- Parameter '{name}' removed - Success")
+        log(self, f" Parameter '{name}' removed - Success")
 
 def add_from_registry(self, reg_type):
     current_tab_index = self.registry_tabs.currentIndex()
@@ -197,7 +197,7 @@ def add_from_registry(self, reg_type):
     self.experiment_table.update_columns(self.model)
     self.best_table.update_columns(self.model)
     
-    log(self, f"-- Added parameters from {reg_type} registry - Success")
+    log(self, f" Added parameters from {reg_type} registry - Success")
 
 def add_to_registry(self, reg_type):
     tab_widget = None
@@ -278,7 +278,7 @@ def add_to_registry(self, reg_type):
         
         if success:
             self.refresh_registry()
-            log(self, f"-- Added {item_name} to {reg_type}/{current_category} registry - Success")
+            log(self, f" Added {item_name} to {reg_type}/{current_category} registry - Success")
         else:
             QMessageBox.warning(self, "Warning", f"Could not add {item_name}. It may already exist.")
 
@@ -315,9 +315,9 @@ def remove_from_registry(self, reg_type):
             success = self.registry_manager.remove_item(reg_type, current_category, item_name)
             
             if success:
-                log(self, f"-- Removed {item_name} from {reg_type}/{current_category} registry - Success")
+                log(self, f" Removed {item_name} from {reg_type}/{current_category} registry - Success")
             else:
-                log(self, f"-- Failed to remove {item_name} from registry - Failed")
+                log(self, f" Failed to remove {item_name} from registry - Failed")
         
         self.refresh_registry()
 
@@ -471,12 +471,12 @@ def load_template(self, template_name):
             self.best_table.update_columns(self.model)
         
         # Log success message
-        log(self, f"-- Loaded {template_name} template with {len(params)} parameters - Success")
+        log(self, f" Loaded {template_name} template with {len(params)} parameters - Success")
     except Exception as e:
         import traceback
         error_msg = f"Error loading template: {str(e)}"
         traceback.print_exc()
-        log(self, f"-- {error_msg} - Error")
+        log(self, f" {error_msg} - Error")
         QMessageBox.critical(self, "Error", error_msg)
 
 def add_substrate_parameter(self):
@@ -515,23 +515,23 @@ def add_substrate_parameter(self):
         self.experiment_table.update_columns(self.model)
         self.best_table.update_columns(self.model)
         
-        log(self, f"-- Substrate '{substrate_name.strip()}' added - Success")
+        log(self, f" Substrate '{substrate_name.strip()}' added - Success")
 
 def generate_initial_experiments(self):
     try:
         n_experiments = self.n_initial_spin.value()
         
         if not self.model.parameters:
-            self.log("-- No parameters defined. Add parameters first - Error")
+            self.log(" No parameters defined. Add parameters first - Error")
             return
             
         if not self.model.objectives:
-            self.log("-- No objectives defined. Define objectives first - Error")
+            self.log(" No objectives defined. Define objectives first - Error")
             return
             
         # Generate initial experiments
         method = self.design_method_combo.currentText().lower()
-        self.log(f"-- Using {method} design method")
+        self.log(f" Using {method} design method")
         
         # Update model's design method
         self.model.design_method = method
@@ -560,7 +560,7 @@ def generate_initial_experiments(self):
             suggestions = self.model._suggest_with_sobol(n_experiments)
         else:
             # Default to BoTorch if method not recognized
-            self.log(f"-- Unknown design method '{method}', using BoTorch - Warning")
+            self.log(f" Unknown design method '{method}', using BoTorch - Warning")
             suggestions = self.model._suggest_with_botorch(n_experiments)
             
         self.model.planned_experiments = suggestions
@@ -570,12 +570,12 @@ def generate_initial_experiments(self):
         # Update the UI
         update_ui_from_model(self)
         
-        self.log(f"-- Generated {n_experiments} initial experiments with {method.upper()} sampling - Success")
+        self.log(f" Generated {n_experiments} initial experiments with {method.upper()} sampling - Success")
         
     except Exception as e:
         import traceback
         traceback.print_exc()
-        self.log(f"-- Failed to generate experiments: {str(e)} - Error")
+        self.log(f" Failed to generate experiments: {str(e)} - Error")
 
 def generate_next_experiments(self):
     """Generate the next round of experiments"""
@@ -615,7 +615,7 @@ def generate_next_experiments(self):
             suggestions = self.model._suggest_with_sobol(n_next)
         else:
             # Default to BoTorch if method not recognized
-            self.log(f"-- Unknown design method '{method}', using BoTorch - Warning")
+            self.log(f" Unknown design method '{method}', using BoTorch - Warning")
             suggestions = self.model._suggest_with_botorch(n_next)
             
         # Add suggestions to planned experiments
@@ -623,7 +623,7 @@ def generate_next_experiments(self):
         
         # Log timing
         elapsed = time.time() - start_time
-        self.log(f"-- Generated {n_next} suggestions in {elapsed:.2f}s")
+        self.log(f" Generated {n_next} suggestions in {elapsed:.2f}s")
         
         final_count = len(self.model.planned_experiments)
         print(f"After adding: {final_count} planned experiments")
@@ -642,14 +642,14 @@ def generate_next_experiments(self):
             # Update experiment table
             self.experiment_table.update_from_planned(self.model, self.round_start_indices)
             
-            log(self, f"-- Generated {n_next} experiments for round {self.current_round} - Success")
+            log(self, f" Generated {n_next} experiments for round {self.current_round} - Success")
         else:
             # Handle case where no suggestions were returned
-            log(self, f"-- No experiments generated. Check parameters and try again - Warning")
+            log(self, f" No experiments generated. Check parameters and try again - Warning")
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        log(self, f"-- Failed to generate experiments: {str(e)} - Error")
+        log(self, f" Failed to generate experiments: {str(e)} - Error")
         
         # Show error dialog to user with helpful message
         from PySide6.QtWidgets import QMessageBox
@@ -772,11 +772,11 @@ def add_result_for_selected(self):
             self.update_result_tables()
             
             # Log success
-            self.log(f"-- Added result for experiment #{exp_id+1} - Success")
+            self.log(f" Added result for experiment #{exp_id+1} - Success")
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        self.log(f"-- Failed to add result: {str(e)} - Error")
+        self.log(f" Failed to add result: {str(e)} - Error")
         print(f"Error details: {error_details}")
 
 def new_project(self):
@@ -801,7 +801,7 @@ def new_project(self):
             
         update_ui_from_model(self)
         self.tab_widget.setCurrentIndex(0)
-        log(self, "-- New project created - Success")
+        log(self, " New project created - Success")
 
 def open_project(self):
     file_path, _ = QFileDialog.getOpenFileName(
@@ -829,11 +829,11 @@ def open_project(self):
                     self.round_start_indices.append((i - 1) * rounds_per_experiment)
             
             update_ui_from_model(self)
-            log(self, f"-- Project loaded from {file_path} - Success")
+            log(self, f" Project loaded from {file_path} - Success")
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open project: {str(e)}")
-            log(self, f"-- Error loading project: {str(e)} - Failed")
+            log(self, f" Error loading project: {str(e)} - Failed")
 
 def save_project(self):
     if not self.model.parameters:
@@ -856,11 +856,11 @@ def save_project(self):
             
             self.working_directory = os.path.dirname(file_path)
             
-            log(self, f"-- Project saved to {file_path} - Success")
+            log(self, f" Project saved to {file_path} - Success")
             
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to save project: {str(e)}")
-            log(self, f"-- Error saving project: {str(e)} - Failed")
+            log(self, f" Error saving project: {str(e)} - Failed")
 
 def import_data(self):
     filepath, _ = QFileDialog.getOpenFileName(
@@ -874,7 +874,7 @@ def import_data(self):
         return
         
     try:
-        log(self, f"-- Importing data from {filepath}")
+        log(self, f" Importing data from {filepath}")
         self.progress_bar.setValue(10)
         
         if filepath.lower().endswith(".xlsx"):
@@ -959,14 +959,14 @@ def import_data(self):
             self.best_result_label.setText(f"{best_score:.2f}%")
             
         self.progress_bar.setValue(100)
-        log(self, f"-- Imported {imported_count} experiments from {filepath} - Success")
+        log(self, f" Imported {imported_count} experiments from {filepath} - Success")
         
         QTimer.singleShot(1000, lambda: self.progress_bar.setValue(0))
         
     except Exception as e:
         self.progress_bar.setValue(0)
         QMessageBox.critical(self, "Error", f"Error importing data: {str(e)}")
-        log(self, f"-- Data import failed: {str(e)} - Error")
+        log(self, f" Data import failed: {str(e)} - Error")
 
 def export_results(self):
     if not self.model.experiments:
@@ -984,7 +984,7 @@ def export_results(self):
         return
         
     try:
-        log(self, f"-- Exporting results to {filepath}")
+        log(self, f" Exporting results to {filepath}")
         self.progress_bar.setValue(10)
         
         from ..core import settings
@@ -1035,7 +1035,7 @@ def export_results(self):
             df.to_csv(filepath, index=False)
         
         self.progress_bar.setValue(100)
-        log(self, f"-- Results exported to {filepath} - Success")
+        log(self, f" Results exported to {filepath} - Success")
         
         QTimer.singleShot(1000, lambda: self.progress_bar.setValue(0))
         
@@ -1044,7 +1044,7 @@ def export_results(self):
     except Exception as e:
         self.progress_bar.setValue(0)
         QMessageBox.critical(self, "Error", f"Error exporting results: {str(e)}")
-        log(self, f"-- Results export failed: {str(e)} - Error")
+        log(self, f" Results export failed: {str(e)} - Error")
 
 def statistical_analysis(self):
     if not self.model.experiments:
@@ -1516,12 +1516,12 @@ def plan_parallel_experiments(self):
             
             if filepath.lower().endswith('.xlsx'):
                 df.to_excel(filepath, index=False)
-                log(self, f"-- Exported plan to {filepath} - Success")
+                log(self, f" Exported plan to {filepath} - Success")
             else:
                 if not filepath.lower().endswith('.csv'):
                     filepath += '.csv'
                 df.to_csv(filepath, index=False)
-                log(self, f"-- Exported plan to {filepath} - Success")
+                log(self, f" Exported plan to {filepath} - Success")
             
             QMessageBox.information(self, "Success", f"Plan exported to {filepath}")
             
@@ -1623,11 +1623,40 @@ def open_structure_editor(self):
         QMessageBox.critical(self, "Error", f"Failed to open structure editor: {str(e)}")
 
 def show_optimization_settings(self):
-    dialog = OptimizationSettingsDialog(self, self.model)
-    if dialog.exec():
-        log(self, "-- Optimization settings updated - Success")
-        
-        self.exploit_slider.setValue(int(self.model.exploitation_weight * 100))
+    """Show dialog for advanced optimization settings."""
+    from PySide6.QtWidgets import QDialog, QVBoxLayout, QFormLayout, QComboBox, QSlider
+    from PySide6.QtCore import Qt
+    
+    try:
+        dialog = OptimizationSettingsDialog(self)
+        if dialog.exec() == QDialog.Accepted:
+            # Update settings from dialog values
+            self.model.exploitation_weight = dialog.exploit_slider.value() / 100.0
+            self.model.design_method = dialog.design_method_combo.currentText().lower()
+            self.model.acquisition_function = dialog.acq_func_combo.currentText().lower()
+            
+            # Log settings update
+            self.log(f"-- Optimization settings updated: {self.model.design_method} method, "
+                  f"{self.model.acquisition_function} acquisition, "
+                  f"{int(self.model.exploitation_weight*100)}% exploitation - Success")
+                  
+            # Update best results
+            if hasattr(self, 'best_result_label') and len(self.model.experiments) > 0:
+                # Calculate current best score
+                best_score = 0.0
+                for exp in self.model.experiments:
+                    if 'score' in exp and exp['score'] > best_score:
+                        best_score = exp['score']
+                        
+                best_score *= 100.0
+                
+                # Update label
+                self.best_result_label.setText(f"{best_score:.2f}%")
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        self.log(f"-- Failed to update optimization settings: {str(e)} - Error")
+        print(f"Error details: {error_details}")
 
 def show_preferences(self):
     prefs_dialog = QDialog(self)
@@ -1927,7 +1956,7 @@ def show_preferences(self):
             
         self.model.exploitation_weight = exploit_spin.value()
         
-        log(self, "-- Preferences updated - Success")
+        log(self, " Preferences updated - Success")
 
 def show_documentation(self):
     doc_dialog = QDialog(self)

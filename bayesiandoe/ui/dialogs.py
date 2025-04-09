@@ -519,8 +519,8 @@ class PriorDialog(QDialog):
         self.canvas.axes.fill_between(x, pdf, color='blue', alpha=0.2)
         
         self.canvas.axes.axvline(self.mean_spin.value(), color='r', linestyle='-', alpha=0.7)
-        self.canvas.axes.axvline(self.mean_spin.value() - self.std_spin.value(), color='g', linestyle='--', alpha=0.7)
-        self.canvas.axes.axvline(self.mean_spin.value() + self.std_spin.value(), color='g', linestyle='--', alpha=0.7)
+        self.canvas.axes.axvline(self.mean_spin.value() - self.std_spin.value(), color='g', linestyle='', alpha=0.7)
+        self.canvas.axes.axvline(self.mean_spin.value() + self.std_spin.value(), color='g', linestyle='', alpha=0.7)
         
         self.canvas.axes.axvline(self.param.low, color='k', linestyle=':', alpha=0.5)
         self.canvas.axes.axvline(self.param.high, color='k', linestyle=':', alpha=0.5)
