@@ -5,10 +5,10 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QLineEdit, QSpinBox, QDoubleSpinBox, 
     QRadioButton, QGroupBox, QComboBox, QCheckBox, QTextEdit,
     QMessageBox, QSlider, QFrame, QTableWidget, QTableWidgetItem,
-    QScrollArea, QListWidget, QTabWidget
+    QScrollArea, QListWidget, QTabWidget, QWidget
 )
 from ..visualizations import plot_parameter_importance
-from ..ui.canvas import MplCanvas
+from .canvas import MplCanvas
 from ..core import settings
 
 class ParameterDialog(QDialog):
