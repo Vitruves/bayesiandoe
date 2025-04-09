@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bayesiandoe"
+version = "1.1.0"
+authors = [
+    {name = "Johan H.G. Natter"},
+]
+description = "Bayesian Design of Experiments for Chemical Optimization"
+requires-python = ">=3.9.0, <3.10.0"
+dependencies = [
+    "alembic",
+    "colorlog",
+    "contourpy",
+    "cycler",
+    "fonttools",
+    "importlib-metadata",
+    "importlib-resources",
+    "joblib",
+    "kiwisolver",
+    "mako",
+    "markupsafe",
+    "matplotlib",
+    "numpy",
+    "optuna",
+    "packaging",
+    "pandas",
+    "patsy",
+    "pillow",
+    "pyparsing",
+    "pyside6",
+    "python-dateutil",
+    "pytz",
+    "pyyaml",
+    "rdkit",
+    "scikit-learn",
+    "scipy",
+    "shiboken6",
+    "six",
+    "sqlalchemy",
+    "statsmodels",
+    "threadpoolctl",
+    "tqdm",
+    "typing-extensions",
+    "tzdata",
+    "zipp",
+]
+
+[project.scripts]
+bayesiandoe = "bayesiandoe.__main__:main" 

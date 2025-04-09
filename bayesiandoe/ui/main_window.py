@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QStatusBar, QProgressBar, QStackedWidget, QTableWidget, QDialog, QListWidgetItem
 )
 
-from BayesianDOE import _calculate_parameter_distance
+from ..core import _calculate_parameter_distance
 
 from ..core import OptunaBayesianExperiment
 from ..parameters import ChemicalParameter
@@ -825,91 +825,22 @@ class BayesianDOEApp(QMainWindow):
         prior_set_group = QGroupBox("Set Prior Knowledge")
         prior_set_layout = QVBoxLayout(prior_set_group)
         
-        param_layout = QHBoxLayout()
-        param_layout.addWidget(QLabel("Select Parameter:"))
+        # Add info label
+        info_label = QLabel("Click on a parameter to set prior knowledge:")
+        info_label.setWordWrap(True)
+        prior_set_layout.addWidget(info_label)
         
-        self.prior_param_combo = QComboBox()
-        self.prior_param_combo.setMinimumWidth(250)
-        self.prior_param_combo.currentTextChanged.connect(self.on_prior_param_changed)
+        # Create scrollable area for parameter buttons
+        param_scroll = QScrollArea()
+        param_scroll.setWidgetResizable(True)
+        param_scroll.setMinimumHeight(300)
         
-        help_btn = QPushButton("?")
-        help_btn.setMaximumWidth(30)
-        help_btn.clicked.connect(self.show_prior_help)
+        param_content = QWidget()
+        self.param_buttons_layout = QVBoxLayout(param_content)
         
-        param_layout.addWidget(self.prior_param_combo)
-        param_layout.addWidget(help_btn)
-        prior_set_layout.addLayout(param_layout)
-        
-        prior_main_scroll = QScrollArea()
-        prior_main_scroll.setWidgetResizable(True)
-        prior_main_scroll.setMinimumHeight(300)
-        
-        prior_main_content = QWidget()
-        prior_main_layout = QVBoxLayout(prior_main_content)
-        
-        prior_scroll = QScrollArea()
-        prior_scroll.setWidgetResizable(True)
-        
-        prior_content = QWidget()
-        prior_content_layout = QVBoxLayout(prior_content)
-        
-        self.prior_ui_stack = QStackedWidget()
-        
-        continuous_widget = QWidget()
-        continuous_layout = QFormLayout(continuous_widget)
-        
-        self.prior_mean_spin = QDoubleSpinBox()
-        self.prior_mean_spin.setRange(-1e9, 1e9)
-        self.prior_mean_spin.setDecimals(4)
-        
-        self.prior_confidence_combo = QComboBox()
-        self.prior_confidence_combo.addItems(["Very High", "High", "Medium", "Low", "Very Low"])
-        self.prior_confidence_combo.setCurrentText("Medium")
-        self.prior_confidence_combo.currentTextChanged.connect(self.update_std_from_confidence)
-        
-        self.prior_std_spin = QDoubleSpinBox()
-        self.prior_std_spin.setRange(0.001, 1e9)
-        self.prior_std_spin.setDecimals(4)
-        
-        continuous_layout.addRow("Expected Optimal Value:", self.prior_mean_spin)
-        continuous_layout.addRow("Confidence Level:", self.prior_confidence_combo)
-        continuous_layout.addRow("Standard Deviation:", self.prior_std_spin)
-        
-        categorical_widget = QWidget()
-        categorical_scroll = QScrollArea()
-        categorical_scroll.setWidgetResizable(True)
-        
-        categorical_content = QWidget()
-        self.categorical_layout = QVBoxLayout(categorical_content)
-        self.categorical_layout.addWidget(QLabel("Set preference weights for each category:"))
-        
-        categorical_scroll.setWidget(categorical_content)
-        
-        categorical_container_layout = QVBoxLayout(categorical_widget)
-        categorical_container_layout.addWidget(categorical_scroll)
-        
-        self.prior_ui_stack.addWidget(continuous_widget)
-        self.prior_ui_stack.addWidget(categorical_widget)
-        
-        prior_content_layout.addWidget(self.prior_ui_stack)
-        prior_scroll.setWidget(prior_content)
-        
-        prior_main_layout.addWidget(prior_scroll)
-        
-        prior_btn_layout = QHBoxLayout()
-        self.set_prior_btn = QPushButton("Set Prior Knowledge")
-        self.remove_prior_btn = QPushButton("Remove Prior")
-        
-        self.set_prior_btn.clicked.connect(self.add_or_update_prior)
-        self.remove_prior_btn.clicked.connect(self.remove_prior)
-        
-        prior_btn_layout.addWidget(self.set_prior_btn)
-        prior_btn_layout.addWidget(self.remove_prior_btn)
-        
-        prior_main_layout.addLayout(prior_btn_layout)
-        
-        prior_main_scroll.setWidget(prior_main_content)    
-        prior_set_layout.addWidget(prior_main_scroll)
+        # Parameter buttons will be added dynamically in update_ui_from_model
+        param_scroll.setWidget(param_content)
+        prior_set_layout.addWidget(param_scroll)
         
         left_panel.addWidget(prior_set_group)
         
@@ -954,46 +885,6 @@ class BayesianDOEApp(QMainWindow):
         layout.addLayout(right_panel, 1)
         
         self.tab_widget.addTab(prior_tab, "Prior Knowledge")
-
-    def on_prior_param_changed(self, param_name):
-        """Handle change of selected parameter in prior tab."""
-        if not param_name or param_name not in self.model.parameters:
-            return
-            
-        param = self.model.parameters[param_name]
-        
-        # Open the prior dialog to set/edit prior
-        dialog = PriorDialog(self, self.model, param_name)
-        if dialog.exec() == QDialog.Accepted and dialog.result:
-            if param.param_type in ["continuous", "discrete"]:
-                param.set_prior(
-                    mean=dialog.result.get("mean"),
-                    std=dialog.result.get("std")
-                )
-                self.log(f"-- Prior set for {param_name} (mean={dialog.result.get('mean')}, std={dialog.result.get('std')}) - Success")
-            else:
-                # Handle categorical priors (preferences)
-                preferences = dialog.result.get("categorical_preferences", {})
-                param.categorical_preferences = preferences
-                self.log(f"-- Categorical prior set for {param_name} - Success")
-                
-            # Update prior table
-            self.update_prior_table()
-    
-    def show_prior_help(self):
-        """Show help information about priors."""
-        QMessageBox.information(
-            self,
-            "About Priors",
-            "Priors represent your belief about the optimal values for each parameter.\n\n"
-            "For continuous and discrete parameters:\n"
-            "- Expected Optimal Value: Your best guess for the optimal value\n"
-            "- Confidence: How sure you are about your guess\n"
-            "- Standard Deviation: Technical parameter controlling spread of values\n\n"
-            "For categorical parameters:\n"
-            "- Set preference weights for each category (higher = more likely to be selected)\n\n"
-            "Setting priors helps guide optimization by focusing on promising regions."
-        )
 
     def setup_experiment_tab(self):
         experiment_tab = QWidget()
@@ -1306,39 +1197,45 @@ class BayesianDOEApp(QMainWindow):
         QApplication.processEvents()
         
     def update_ui_from_model(self):
+        """Update all UI elements based on current model state."""
+        # Update parameter table
         self.param_table.update_from_model(self.model)
         
-        self.update_parameter_combos()
-        
+        # Update prior table
         self.update_prior_table()
         
+        # Update parameter combos
+        self.update_parameter_combos()
+        
+        # Update parameter buttons in prior tab
+        self.update_prior_param_buttons()
+        
+        # Update experiment table
         self.experiment_table.update_columns(self.model)
         self.experiment_table.update_from_planned(self.model, self.round_start_indices)
         
+        # Update best results
         self.best_table.update_columns(self.model)
         self.best_table.update_from_model(self.model, self.n_best_spin.value())
         
-        columns = ["Round", "ID", "Date"] + self.model.objectives
-        self.all_results_table.setColumnCount(len(columns))
-        self.all_results_table.setHorizontalHeaderLabels(columns)
+        # Update results table
         self.all_results_table.update_from_model(self.model)
         
+        # Update experiment counters
         self.current_round_label.setText(str(self.current_round))
-        completed_count = len(self.model.experiments)
-        planned_count = len(self.model.planned_experiments)
-        self.results_count_label.setText(f"{completed_count} / {planned_count}")
-        self.total_exp_label.setText(str(planned_count))
-        
-        self.obj_yield_check.setChecked("yield" in self.model.objectives)
-        self.obj_purity_check.setChecked("purity" in self.model.objectives)
-        self.obj_selectivity_check.setChecked("selectivity" in self.model.objectives)
-        
-        self.weight_yield_spin.setValue(self.model.objective_weights.get("yield", 1.0))
-        self.weight_purity_spin.setValue(self.model.objective_weights.get("purity", 1.0))
-        self.weight_selectivity_spin.setValue(self.model.objective_weights.get("selectivity", 1.0))
-        
-        self.exploit_slider.setValue(70)  # Default value
-        
+        if self.model.experiments and self.model.planned_experiments:
+            self.results_count_label.setText(f"{len(self.model.experiments)} / {len(self.model.planned_experiments)}")
+            self.total_exp_label.setText(str(len(self.model.planned_experiments)))
+            
+        # Update progress
+        completed = len(self.model.experiments)
+        total = len(self.model.planned_experiments) if self.model.planned_experiments else 0
+        if total > 0:
+            progress = int(100 * completed / total)
+            self.progress_bar.setValue(progress)
+        else:
+            self.progress_bar.setValue(0)
+            
     def update_parameter_combos(self):
         """Update parameter dropdown selections in various UI elements."""
         # Store current selections
@@ -3240,7 +3137,7 @@ class BayesianDOEApp(QMainWindow):
         # Generate initial experiments
         try:
             # For now, use Optuna's built-in mechanism
-            experiments = self.model.suggest_experiments(n=n_exps)
+            experiments = self.model.suggest_experiments(n_suggestions=n_exps)
             self.model.planned_experiments.extend(experiments)
             
             # Update UI
@@ -3274,7 +3171,7 @@ class BayesianDOEApp(QMainWindow):
         
         # Generate next experiments
         try:
-            experiments = self.model.suggest_experiments(n=n_exps)
+            experiments = self.model.suggest_experiments(n_suggestions=n_exps)
             
             # Add to planned experiments and advance round
             self.round_start_indices.append(len(self.model.planned_experiments))
@@ -3727,3 +3624,81 @@ class BayesianDOEApp(QMainWindow):
         layout.addLayout(buttons)
         
         detail_dialog.exec()
+
+    def on_param_button_clicked(self, param_name):
+        """Handle click on a parameter button in the prior tab."""
+        if not param_name or param_name not in self.model.parameters:
+            return
+            
+        param = self.model.parameters[param_name]
+        
+        # Open the prior dialog to set/edit prior
+        dialog = PriorDialog(self, self.model, param_name)
+        if dialog.exec() == QDialog.Accepted and dialog.result:
+            if param.param_type in ["continuous", "discrete"]:
+                param.set_prior(
+                    mean=dialog.result.get("mean"),
+                    std=dialog.result.get("std")
+                )
+                self.log(f"-- Prior set for {param_name} (mean={dialog.result.get('mean')}, std={dialog.result.get('std')}) - Success")
+            else:
+                # Handle categorical priors (preferences)
+                preferences = dialog.result.get("categorical_preferences", {})
+                param.categorical_preferences = preferences
+                self.log(f"-- Categorical prior set for {param_name} - Success")
+                
+            # Update prior table
+            self.update_prior_table()
+            # Update visualization if this parameter is selected
+            if self.viz_param_combo.currentText() == param_name:
+                self.update_prior_plot()
+
+    def update_prior_param_buttons(self):
+        """Update the parameter buttons in the prior tab."""
+        # Clear existing buttons
+        while self.param_buttons_layout.count():
+            item = self.param_buttons_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+                
+        # Add button for each parameter
+        for name, param in self.model.parameters.items():
+            button = QPushButton(name)
+            
+            # Add indicator if this parameter already has a prior
+            has_prior = False
+            if param.param_type in ["continuous", "discrete"] and param.prior_mean is not None:
+                has_prior = True
+                button.setText(f"{name} ✓")
+            elif param.param_type == "categorical" and param.categorical_preferences:
+                has_prior = True
+                button.setText(f"{name} ✓")
+                
+            # Style button differently if it has a prior
+            if has_prior:
+                button.setStyleSheet("QPushButton { font-weight: bold; background-color: #e6f2ff; }")
+                
+            # Connect button to handler with parameter name
+            button.clicked.connect(lambda checked, n=name: self.on_param_button_clicked(n))
+            
+            self.param_buttons_layout.addWidget(button)
+            
+        # Add help button
+        help_btn = QPushButton("About Priors")
+        help_btn.clicked.connect(self.show_prior_help)
+        self.param_buttons_layout.addWidget(help_btn)
+        
+    def show_prior_help(self):
+        """Show help information about priors."""
+        QMessageBox.information(
+            self,
+            "About Priors",
+            "Priors represent your belief about the optimal values for each parameter.\n\n"
+            "For continuous and discrete parameters:\n"
+            "- Expected Optimal Value: Your best guess for the optimal value\n"
+            "- Confidence: How sure you are about your guess\n"
+            "- Standard Deviation: Technical parameter controlling spread of values\n\n"
+            "For categorical parameters:\n"
+            "- Set preference weights for each category (higher = more likely to be selected)\n\n"
+            "Setting priors helps guide optimization by focusing on promising regions."
+        )

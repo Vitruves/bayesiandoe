@@ -1,6 +1,5 @@
 alembic
 altgraph
--e file:///Users/vitruves/Developer/GitHub/BaysesianDOE
 colorlog
 contourpy
 cycler
