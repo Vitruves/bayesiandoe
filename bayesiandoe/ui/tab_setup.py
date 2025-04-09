@@ -15,7 +15,8 @@ from .canvas import MplCanvas, Mpl3DCanvas
 from .ui_callbacks import (
     update_objectives, refresh_registry, show_registry_item_tooltip,
     on_prior_selected, update_best_results, show_result_details,
-    show_prior_help, on_param_button_clicked, show_design_method_help
+    show_prior_help, on_param_button_clicked, show_design_method_help,
+    show_parameter_links
 )
 from .ui_visualization import (
     update_prior_plot, update_results_plot, update_model_plot,
@@ -63,15 +64,41 @@ def setup_setup_tab(self):
     templates_group = QGroupBox("Parameter Templates")
     templates_layout = QGridLayout(templates_group)
     
+    # Create direct functions for each template button
+    def load_reaction_conditions():
+        load_template(self, "reaction_conditions")
+        
+    def load_catalyst():
+        load_template(self, "catalyst")
+        
+    def load_solvent():
+        load_template(self, "solvent")
+        
+    def load_cross_coupling():
+        load_template(self, "cross_coupling")
+        
+    def load_oxidation():
+        load_template(self, "oxidation")
+        
+    def load_reduction():
+        load_template(self, "reduction")
+        
+    def load_amide_coupling():
+        load_template(self, "amide_coupling")
+        
+    def load_organocatalysis():
+        load_template(self, "organocatalysis")
+    
+    # Map template names to loading functions    
     templates = [
-        ("Reaction Conditions", lambda: load_template(self, "reaction_conditions")),
-        ("Catalyst Screening", lambda: load_template(self, "catalyst")),
-        ("Solvent Screening", lambda: load_template(self, "solvent")),
-        ("Cross-Coupling", lambda: load_template(self, "cross_coupling")),
-        ("Oxidation", lambda: load_template(self, "oxidation")),
-        ("Reduction", lambda: load_template(self, "reduction")),
-        ("Amide Coupling", lambda: load_template(self, "amide_coupling")),
-        ("Organocatalysis", lambda: load_template(self, "organocatalysis"))
+        ("Reaction Conditions", load_reaction_conditions),
+        ("Catalyst Screening", load_catalyst),
+        ("Solvent Screening", load_solvent),
+        ("Cross-Coupling", load_cross_coupling),
+        ("Oxidation", load_oxidation),
+        ("Reduction", load_reduction),
+        ("Amide Coupling", load_amide_coupling),
+        ("Organocatalysis", load_organocatalysis)
     ]
     
     row, col = 0, 0
@@ -222,6 +249,32 @@ def setup_prior_tab(self):
     
     left_panel.addWidget(prior_table_group)
     
+    # Parameter linking section
+    link_group = QGroupBox("Parameter Linking")
+    link_layout = QVBoxLayout(link_group)
+    
+    link_info = QLabel(
+        "Parameter linking allows the model to learn relationships between parameters. "
+        "When the model discovers that certain parameter combinations work well together, "
+        "it will suggest similar combinations in future experiments."
+    )
+    link_info.setWordWrap(True)
+    link_layout.addWidget(link_info)
+    
+    link_param_layout = QHBoxLayout()
+    link_param_layout.addWidget(QLabel("Parameter:"))
+    
+    self.link_param_combo = QComboBox()
+    link_param_layout.addWidget(self.link_param_combo, 1)
+    
+    self.show_links_btn = QPushButton("Show/Edit Links")
+    self.show_links_btn.clicked.connect(lambda: show_parameter_links(self, self.link_param_combo.currentText()))
+    link_param_layout.addWidget(self.show_links_btn)
+    
+    link_layout.addLayout(link_param_layout)
+    
+    left_panel.addWidget(link_group)
+    
     right_panel = QVBoxLayout()
     
     viz_group = QGroupBox("Prior Visualization")
@@ -250,152 +303,118 @@ def setup_prior_tab(self):
     self.tab_widget.addTab(prior_tab, "Prior Knowledge")
 
 def setup_experiment_tab(self):
+    """Set up the experiment tab interface."""
     experiment_tab = QWidget()
-    layout = QHBoxLayout(experiment_tab)
+    self.tab_widget.addTab(experiment_tab, "Experiments")
     
-    left_panel = QVBoxLayout()
+    layout = QVBoxLayout(experiment_tab)
     
-    round_group = QGroupBox("Current Round")
-    round_layout = QVBoxLayout(round_group)
+    # Top control panel
+    control_panel = QHBoxLayout()
     
-    self.current_round_label = QLabel("0")
-    self.current_round_label.setFont(QFont("Arial", 24, QFont.Bold))
-    self.current_round_label.setAlignment(Qt.AlignCenter)
+    # Initial experiments group
+    initial_group = QGroupBox("Initial Experiments")
+    initial_layout = QHBoxLayout(initial_group)
     
-    round_frame = QFrame()
-    round_frame.setFrameShape(QFrame.StyledPanel)
-    round_frame.setStyleSheet("background-color: #e6f2ff; border-radius: 8px;")
-    round_frame_layout = QVBoxLayout(round_frame)
-    round_frame_layout.addWidget(self.current_round_label)
-    
-    round_layout.addWidget(round_frame)
-    
-    left_panel.addWidget(round_group)
-    
-    workflow_group = QGroupBox("Optimization Workflow")
-    workflow_layout = QVBoxLayout(workflow_group)
-    
-    step1_group = QGroupBox("Step 1: Initial Experiments")
-    step1_layout = QFormLayout(step1_group)
-    
+    initial_layout.addWidget(QLabel("Number of Experiments:"))
     self.n_initial_spin = QSpinBox()
-    self.n_initial_spin.setRange(3, 20)
-    self.n_initial_spin.setValue(5)
+    self.n_initial_spin.setRange(1, 100)
+    self.n_initial_spin.setValue(10)
+    initial_layout.addWidget(self.n_initial_spin)
     
     self.design_method_combo = QComboBox()
-    self.design_method_combo.addItems([
-        "BoTorch", "TPE", "GPEI", "Random", "Latin Hypercube", "Sobol", "CMA-ES", "NSGA-II"
-    ])
-    self.design_method_combo.setCurrentIndex(0)
+    self.design_method_combo.addItems(["Random", "Latin Hypercube", "Sobol", "BoTorch", "TPE", "GPEI"])
+    self.design_method_combo.setCurrentText("Latin Hypercube")
+    initial_layout.addWidget(self.design_method_combo)
     
-    design_method_layout = QHBoxLayout()
-    design_method_layout.addWidget(self.design_method_combo)
+    generate_btn = QPushButton("Generate Initial")
+    generate_btn.clicked.connect(lambda: generate_initial_experiments(self))
+    initial_layout.addWidget(generate_btn)
     
-    design_help_btn = QPushButton("?")
-    design_help_btn.setMaximumWidth(30)
-    design_help_btn.setToolTip("Click for information about sampling methods")
-    design_help_btn.clicked.connect(lambda: show_design_method_help(self))
-    design_method_layout.addWidget(design_help_btn)
+    control_panel.addWidget(initial_group)
     
-    step1_layout.addRow("Number of initial experiments:", self.n_initial_spin)
-    step1_layout.addRow("Design method:", design_method_layout)
+    # Next round group
+    next_group = QGroupBox("Next Round")
+    next_layout = QHBoxLayout(next_group)
     
-    self.generate_initial_btn = QPushButton("Generate Initial Experiments")
-    self.generate_initial_btn.clicked.connect(lambda: generate_initial_experiments(self))
-    
-    step1_layout.addRow(self.generate_initial_btn)
-    
-    workflow_layout.addWidget(step1_group)
-    
-    step2_group = QGroupBox("Step 2: Run & Input Results")
-    step2_layout = QVBoxLayout(step2_group)
-    
-    step2_layout.addWidget(QLabel("Select an experiment from the table and click 'Add Result'"))
-    
-    result_layout = QHBoxLayout()
-    result_layout.addWidget(QLabel("Experiments with results:"))
-    self.results_count_label = QLabel("0 / 0")
-    result_layout.addWidget(self.results_count_label)
-    
-    step2_layout.addLayout(result_layout)
-    
-    self.add_result_btn = QPushButton("Add Result for Selected")
-    self.add_result_btn.clicked.connect(lambda: add_result_for_selected(self))
-    step2_layout.addWidget(self.add_result_btn)
-    
-    workflow_layout.addWidget(step2_group)
-    
-    step3_group = QGroupBox("Step 3: Generate Next Round")
-    step3_layout = QVBoxLayout(step3_group)
-    
-    next_layout = QHBoxLayout()
-    next_layout.addWidget(QLabel("Additional experiments:"))
+    next_layout.addWidget(QLabel("Number of Experiments:"))
     self.n_next_spin = QSpinBox()
-    self.n_next_spin.setRange(1, 10)
-    self.n_next_spin.setValue(3)
+    self.n_next_spin.setRange(1, 50)
+    self.n_next_spin.setValue(5)
     next_layout.addWidget(self.n_next_spin)
     
-    step3_layout.addLayout(next_layout)
-    
-    explore_layout = QVBoxLayout()
-    explore_layout.addWidget(QLabel("Exploration-Exploitation Balance:"))
-    
-    slider_layout = QHBoxLayout()
+    next_layout.addWidget(QLabel("Exploration:"))
     self.exploit_slider = QSlider(Qt.Horizontal)
     self.exploit_slider.setRange(0, 100)
     self.exploit_slider.setValue(70)
-    slider_layout.addWidget(self.exploit_slider)
+    self.exploit_slider.setToolTip("0 = pure exploration, 100 = pure exploitation")
+    next_layout.addWidget(self.exploit_slider, 1)
     
-    explore_layout.addLayout(slider_layout)
+    generate_next_btn = QPushButton("Generate Next")
+    generate_next_btn.clicked.connect(lambda: generate_next_experiments(self))
+    next_layout.addWidget(generate_next_btn)
     
-    label_layout = QHBoxLayout()
-    label_layout.addWidget(QLabel("Explore"))
-    label_layout.addStretch()
-    label_layout.addWidget(QLabel("Exploit"))
+    control_panel.addWidget(next_group)
     
-    explore_layout.addLayout(label_layout)
+    # Round indicator
+    round_group = QGroupBox("Current Round")
+    round_layout = QHBoxLayout(round_group)
     
-    step3_layout.addLayout(explore_layout)
+    round_layout.addWidget(QLabel("Round:"))
+    self.current_round_label = QLabel("1")
+    self.current_round = 1
     
-    self.generate_next_btn = QPushButton("Generate Next Experiments")
-    self.generate_next_btn.clicked.connect(lambda: generate_next_experiments(self))
-    step3_layout.addWidget(self.generate_next_btn)
+    # Make the round label stand out with larger font
+    font = self.current_round_label.font()
+    font.setPointSize(font.pointSize() + 4)
+    font.setBold(True)
+    self.current_round_label.setFont(font)
     
-    workflow_layout.addWidget(step3_group)
+    round_layout.addWidget(self.current_round_label)
+    control_panel.addWidget(round_group)
     
-    workflow_layout.addWidget(QFrame(frameShape=QFrame.HLine))
+    layout.addLayout(control_panel)
     
-    stats_group = QGroupBox("Optimization Progress")
-    stats_layout = QFormLayout(stats_group)
+    # Instructions for direct table editing
+    instructions_box = QGroupBox("Result Entry")
+    instructions_layout = QVBoxLayout(instructions_box)
     
-    self.total_exp_label = QLabel("0")
-    self.best_result_label = QLabel("N/A")
-    self.est_rounds_label = QLabel("N/A")
+    instructions_label = QLabel(
+        "<b>Two ways to enter results:</b><br>"
+        "1. <b>Direct editing:</b> Double-click on any result cell (columns with *) to enter values directly<br>"
+        "2. <b>Dialog:</b> Select an experiment row and click 'Add Result' for a detailed entry form"
+    )
+    instructions_label.setWordWrap(True)
+    instructions_layout.addWidget(instructions_label)
     
-    stats_layout.addRow("Total experiments:", self.total_exp_label)
-    stats_layout.addRow("Best result so far:", self.best_result_label)
-    stats_layout.addRow("Estimated rounds to converge:", self.est_rounds_label)
+    # Quick tip
+    tip_label = QLabel(
+        "<i>Tip: You can enter values as 85.2 or 85.2% - both work!</i>"
+    )
+    tip_label.setStyleSheet("color: #0066cc;")
+    instructions_layout.addWidget(tip_label)
     
-    workflow_layout.addWidget(stats_group)
+    layout.addWidget(instructions_box)
     
-    left_panel.addWidget(workflow_group)
-    
-    right_panel = QVBoxLayout()
-    
-    exp_group = QGroupBox("Experimental Plan")
-    exp_layout = QVBoxLayout(exp_group)
+    # Experiment table
+    experiment_group = QGroupBox("Planned Experiments")
+    experiment_layout = QVBoxLayout(experiment_group)
     
     self.experiment_table = ExperimentTable()
+    experiment_layout.addWidget(self.experiment_table)
+    
+    button_layout = QHBoxLayout()
+    
+    add_result_btn = QPushButton("Add Result")
+    add_result_btn.clicked.connect(lambda: add_result_for_selected(self))
+    button_layout.addWidget(add_result_btn)
+    
+    experiment_layout.addLayout(button_layout)
+    
+    layout.addWidget(experiment_group, 1)  # Give it more vertical space
+    
+    # Update UI
     self.experiment_table.update_columns(self.model)
-    
-    exp_layout.addWidget(self.experiment_table)
-    
-    right_panel.addWidget(exp_group)
-    
-    layout.addLayout(left_panel)
-    layout.addLayout(right_panel, 1)
-    
-    self.tab_widget.addTab(experiment_tab, "Experiment Design")
 
 def setup_results_tab(self):
     results_tab = QWidget()
@@ -410,7 +429,13 @@ def setup_results_tab(self):
     
     control_layout.addWidget(QLabel("Plot Type:"))
     self.plot_type_combo = QComboBox()
-    self.plot_type_combo.addItems(["Optimization History", "Parameter Importance", "Parameter Contour", "Objective Correlation"])
+    self.plot_type_combo.addItems([
+        "Optimization History", 
+        "Parameter Importance", 
+        "Parameter Contour", 
+        "Objective Correlation",
+        "Parameter Links"
+    ])
     control_layout.addWidget(self.plot_type_combo)
     
     control_layout.addWidget(QLabel("X-axis:"))

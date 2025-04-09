@@ -67,7 +67,7 @@ class BayesianDOEApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.model = OptunaBayesianExperiment()
-        self.current_round = 0
+        self.current_round = 1
         self.round_start_indices = []
         self.working_directory = os.getcwd()
         
@@ -91,6 +91,13 @@ class BayesianDOEApp(QMainWindow):
         # Add the n_initial_spin and n_next_spin attributes
         self.n_initial_spin = None
         self.n_next_spin = None
+        
+        # Initialize suggestion time tracking
+        self.model._suggestion_start_time = 0
+        
+        # Initialize planned_experiments to avoid None issues
+        if not hasattr(self.model, 'planned_experiments'):
+            self.model.planned_experiments = []
         
         self.create_menu_bar()
         self.create_status_bar()
@@ -236,3 +243,40 @@ class BayesianDOEApp(QMainWindow):
             return "continue"
         else:
             return "cancel"
+
+    def update_result_tables(self):
+        """Update all result tables when a result is added or modified.
+        This is called after direct table editing or through the add_result_for_selected method."""
+        # Update the best results table
+        if hasattr(self, 'best_table'):
+            self.best_table.update_from_model(self.model, self.n_best_spin.value())
+            
+        # Update the all results table
+        if hasattr(self, 'all_results_table'):
+            self.all_results_table.update_from_model(self.model)
+            
+        # Update the best result label
+        update_best_result_label(self)
+            
+        # Update counts
+        if hasattr(self, 'results_count_label'):
+            completed_count = len(self.model.experiments)
+            planned_count = len(self.model.planned_experiments)
+            self.results_count_label.setText(f"{completed_count} / {planned_count}")
+            
+        # Update plots if we're on the results or analysis tab
+        current_tab = self.tab_widget.currentIndex()
+        if current_tab == 3:  # Results tab
+            update_results_plot(self)
+        elif current_tab == 4:  # Analysis tab
+            if hasattr(self, 'convergence_canvas'):
+                update_convergence_plot(self)
+            if hasattr(self, 'correlation_canvas'):
+                update_correlation_plot(self)
+                
+        # Log success message (only if not already logged from the source)
+        if not hasattr(self, '_result_updated_logged') or not self._result_updated_logged:
+            self.log("-- Result tables updated - Success")
+            self._result_updated_logged = True
+            # Reset the flag after a short delay
+            QTimer.singleShot(100, lambda: setattr(self, '_result_updated_logged', False))

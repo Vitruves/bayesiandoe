@@ -104,6 +104,9 @@ def update_results_plot(self):
             
     elif plot_type == "Objective Correlation":
         self.result_canvas.axes = plot_objective_correlation(self.model, self.result_canvas.axes)
+        
+    elif plot_type == "Parameter Links":
+        update_links_plot(self)
     
     self.result_canvas.draw()
 
@@ -428,6 +431,195 @@ def update_correlation_plot(self):
             ha='center', va='center', transform=self.corr_canvas.axes.transAxes)
         self.corr_canvas.draw()
         self.log(f"-- Error updating correlation plot: {str(e)} - Error")
+
+def update_links_plot(self):
+    """Create a network visualization of parameter links discovered during optimization."""
+    try:
+        ax = self.result_canvas.axes
+        ax.clear()
+        
+        if not self.model.experiments or len(self.model.experiments) < 4:
+            ax.text(0.5, 0.5, "Need more experiments to analyze parameter relationships", 
+                  ha='center', va='center', transform=ax.transAxes)
+            self.result_canvas.draw()
+            return
+            
+        import matplotlib.pyplot as plt
+        import numpy as np
+        from matplotlib.patches import FancyArrowPatch
+        
+        # Get all parameters and count their links
+        params = list(self.model.parameters.keys())
+        n_params = len(params)
+        
+        # Create a matrix to represent links
+        link_matrix = np.zeros((n_params, n_params))
+        link_types = {}  # Store link types (positive/negative)
+        
+        # Check if parameters have linked_parameters attribute
+        for i, p1 in enumerate(params):
+            param = self.model.parameters[p1]
+            if hasattr(param, 'linked_parameters'):
+                for p2, link_info in param.linked_parameters.items():
+                    if p2 in params:
+                        j = params.index(p2)
+                        link_matrix[i, j] = link_info['strength']
+                        link_types[(i, j)] = link_info['type']
+        
+        # If no links found, try to infer them from correlations
+        if np.sum(link_matrix) == 0:
+            self.log("-- No explicit parameter links found. Analyzing correlations...")
+            
+            # Extract parameter values and results from experiments
+            param_values = []
+            results = []
+            
+            for exp in self.model.experiments:
+                if 'params' in exp and 'results' in exp and self.model.objectives[0] in exp['results']:
+                    param_values.append(exp['params'])
+                    results.append(exp['results'][self.model.objectives[0]])
+                    
+            if len(results) < 4:
+                ax.text(0.5, 0.5, "Need more experimental results for correlation analysis", 
+                      ha='center', va='center', transform=ax.transAxes)
+                self.result_canvas.draw()
+                return
+                
+            # Calculate correlations
+            param_matrix = np.zeros((len(param_values), n_params))
+            
+            for i, param_dict in enumerate(param_values):
+                for j, param_name in enumerate(params):
+                    if param_name in param_dict:
+                        param = self.model.parameters[param_name]
+                        if param.param_type == "categorical" and param.choices:
+                            # Convert categorical to numeric
+                            try:
+                                val = param.choices.index(param_dict[param_name]) / (len(param.choices) - 1)
+                            except:
+                                val = 0
+                        else:
+                            # Normalize continuous/discrete values
+                            val = (param_dict[param_name] - param.low) / (param.high - param.low) if param.high > param.low else 0.5
+                        param_matrix[i, j] = val
+            
+            # Calculate correlation matrix
+            import pandas as pd
+            corr_matrix = pd.DataFrame(param_matrix, columns=params).corr()
+            
+            # Use correlations to create links
+            for i in range(n_params):
+                for j in range(n_params):
+                    if i != j:
+                        # Only show strong correlations
+                        if abs(corr_matrix.iloc[i, j]) > 0.4:
+                            link_matrix[i, j] = abs(corr_matrix.iloc[i, j])
+                            link_types[(i, j)] = 'positive' if corr_matrix.iloc[i, j] > 0 else 'negative'
+        
+        # If we still don't have any links, show a message
+        if np.sum(link_matrix) == 0:
+            ax.text(0.5, 0.5, "No significant parameter relationships detected yet", 
+                  ha='center', va='center', transform=ax.transAxes)
+            self.result_canvas.draw()
+            return
+            
+        # Create network layout using spring layout
+        try:
+            import networkx as nx
+            G = nx.DiGraph()
+            
+            # Add nodes
+            for i, param in enumerate(params):
+                G.add_node(i, name=param)
+                
+            # Add edges
+            for i in range(n_params):
+                for j in range(n_params):
+                    if link_matrix[i, j] > 0:
+                        G.add_edge(i, j, weight=link_matrix[i, j], type=link_types.get((i, j), 'positive'))
+            
+            # Use spring layout with strength based on weights
+            pos = nx.spring_layout(G, k=1/np.sqrt(n_params), iterations=50)
+            
+        except ImportError:
+            # Fallback to simple circular layout
+            theta = np.linspace(0, 2 * np.pi, n_params, endpoint=False)
+            pos = {i: (np.cos(t), np.sin(t)) for i, t in enumerate(theta)}
+        
+        # Draw parameter nodes
+        for i, param in enumerate(params):
+            x, y = pos[i]
+            
+            # Calculate node size based on number of connections
+            node_size = 0.05 + 0.02 * np.sum(link_matrix[i, :] > 0) + 0.02 * np.sum(link_matrix[:, i] > 0)
+            circle = plt.Circle((x, y), node_size, color='#4285f4')
+            ax.add_patch(circle)
+            
+            # Add parameter name label
+            ax.text(x, y, param, ha='center', va='center', fontsize=9,
+                  bbox=dict(facecolor='white', alpha=0.8, boxstyle='round,pad=0.2'))
+        
+        # Draw links between parameters
+        arrow_patches = []
+        for i in range(n_params):
+            for j in range(n_params):
+                if link_matrix[i, j] > 0:
+                    x1, y1 = pos[i]
+                    x2, y2 = pos[j]
+                    
+                    # Link color based on positive/negative relationship
+                    color = 'green' if link_types.get((i, j), 'positive') == 'positive' else 'red'
+                    
+                    # Arrow width based on strength
+                    width = 0.005 + 0.02 * link_matrix[i, j]
+                    
+                    # Create arrow
+                    arrow = FancyArrowPatch((x1, y1), (x2, y2),
+                                          arrowstyle='-|>', color=color,
+                                          linewidth=width*50, alpha=0.7,
+                                          shrinkA=15, shrinkB=15,
+                                          mutation_scale=15,
+                                          connectionstyle='arc3,rad=0.1')
+                    arrow_patches.append(arrow)
+                    ax.add_patch(arrow)
+                    
+                    # Add small label showing strength
+                    mid_x = (x1 + x2) / 2
+                    mid_y = (y1 + y2) / 2
+                    ax.text(mid_x, mid_y, f"{link_matrix[i, j]:.2f}",
+                          fontsize=7, ha='center', va='center',
+                          bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.1'))
+        
+        # Add legend
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color='green', lw=2, label='Positive Relationship'),
+            Line2D([0], [0], color='red', lw=2, label='Negative Relationship')
+        ]
+        ax.legend(handles=legend_elements, loc='upper right')
+        
+        # Set equal aspect and remove axis
+        ax.set_aspect('equal')
+        ax.axis('off')
+        
+        # Set plot title
+        ax.set_title('Parameter Relationship Network', fontsize=12)
+        
+        # Set limits with margin
+        ax.set_xlim(-1.2, 1.2)
+        ax.set_ylim(-1.2, 1.2)
+        
+        self.result_canvas.draw()
+        self.log("-- Parameter relationship network plot updated - Success")
+        
+    except Exception as e:
+        import traceback
+        self.result_canvas.axes.clear()
+        self.result_canvas.axes.text(0.5, 0.5, f"Error creating parameter links plot: {str(e)}", 
+                                  ha='center', va='center', transform=self.result_canvas.axes.transAxes)
+        self.result_canvas.draw()
+        self.log(f"-- Error plotting parameter links: {str(e)} - Error")
+        print(traceback.format_exc())
 
 class SurfacePlotWorker(QThread):
     """Worker thread for generating surface plots without blocking UI."""

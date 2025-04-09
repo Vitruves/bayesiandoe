@@ -61,7 +61,8 @@ def edit_parameter(self):
         
     param = self.model.parameters[name]
     
-    dialog = self.ParameterDialog(self, param, edit_mode=True)
+    from .dialogs import ParameterDialog
+    dialog = ParameterDialog(self, param, edit_mode=True)
     if dialog.exec():
         result = dialog.result
         
@@ -322,102 +323,113 @@ def remove_from_registry(self, reg_type):
 
 def load_template(self, template_name):
     from ..parameters import ChemicalParameter
+    from PySide6.QtWidgets import QMessageBox
+    from .ui_utils import update_parameter_combos, log
     
     if template_name == "reaction_conditions":
         params = [
-            ChemicalParameter(name="Temperature", param_type="continuous", low=0, high=150, units="°C"),
-            ChemicalParameter(name="Time", param_type="continuous", low=0.5, high=24, units="h"),
-            ChemicalParameter(name="Concentration", param_type="continuous", low=0.05, high=2.0, units="M"),
+            ChemicalParameter(name="Temperature", param_type="continuous", low=25, high=100, units="°C"),
+            ChemicalParameter(name="Time", param_type="continuous", low=1, high=16, units="h"),
+            ChemicalParameter(name="Concentration", param_type="continuous", low=0.1, high=1.0, units="M"),
             ChemicalParameter(name="Solvent", param_type="categorical", choices=["Toluene", "THF", "DCM", "MeOH", "DMSO", "DMF"]),
             ChemicalParameter(name="Atmosphere", param_type="categorical", choices=["Air", "N₂", "Ar"])
         ]
-        
     elif template_name == "catalyst":
         params = [
-            ChemicalParameter(name="Catalyst", param_type="categorical", choices=["Pd(OAc)₂", "Pd(PPh₃)₄", "Pd/C", "Pd₂(dba)₃", "PdCl₂"]),
-            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=0.1, high=10, units="mol%"),
-            ChemicalParameter(name="Ligand", param_type="categorical", choices=["PPh₃", "BINAP", "Xantphos", "dppf", "None"]),
-            ChemicalParameter(name="Ligand:Metal Ratio", param_type="continuous", low=0.5, high=5, units="L:M")
+            ChemicalParameter(name="Catalyst", param_type="categorical", 
+                choices=["Pd(OAc)₂", "Pd(PPh₃)₄", "Pd₂(dba)₃", "PdCl₂(PPh₃)₂", "Pd(dppf)Cl₂", "Ni(COD)₂", "NiCl₂·DME"]),
+            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=0.05, high=0.5, units="mol%"),
+            ChemicalParameter(name="Ligand", param_type="categorical", 
+                choices=["PPh₃", "P(t-Bu)₃", "BINAP", "XPhos", "SPhos", "dppf", "Xantphos", "None"]),
+            ChemicalParameter(name="Ligand:Catalyst Ratio", param_type="continuous", low=0.5, high=5, units="L:M"),
+            ChemicalParameter(name="Substrate A", param_type="continuous", low=1, high=1.0001, units="equiv"),
+            ChemicalParameter(name="Substrate B", param_type="continuous", low=1, high=5, units="equiv"),
+            ChemicalParameter(name="Temperature", param_type="continuous", low=25, high=100, units="°C"),
+            ChemicalParameter(name="Time", param_type="continuous", low=1, high=16, units="h"),
+            ChemicalParameter(name="Solvent", param_type="categorical", 
+                choices=["Toluene", "THF", "DCM", "DMF", "DMSO", "MeCN", "MeOH", "EtOH", "H₂O"])
         ]
-        
     elif template_name == "solvent":
         params = [
             ChemicalParameter(name="Solvent", param_type="categorical", 
-                choices=["Water", "Methanol", "Ethanol", "Acetone", "Acetonitrile", "DMF", 
-                        "DMSO", "THF", "Toluene", "DCM", "EtOAc", "Hexane"]),
-            ChemicalParameter(name="Co-solvent", param_type="categorical", 
-                choices=["None", "Water", "Methanol", "DMSO", "THF"]),
-            ChemicalParameter(name="Co-solvent Ratio", param_type="continuous", low=0, high=50, units="%vol")
+                choices=["Toluene", "THF", "DCM", "DMF", "DMSO", "MeCN", "MeOH", "EtOH", "H₂O", 
+                         "Hexane", "Acetone", "Diethyl Ether", "1,4-Dioxane"]),
+            ChemicalParameter(name="Temperature", param_type="continuous", low=25, high=100, units="°C"),
+            ChemicalParameter(name="Time", param_type="continuous", low=1, high=16, units="h")
         ]
-        
     elif template_name == "cross_coupling":
         params = [
             ChemicalParameter(name="Catalyst", param_type="categorical", 
-                choices=["Pd(OAc)₂", "Pd(PPh₃)₄", "Pd₂(dba)₃", "PdCl₂", "Ni(COD)₂", "NiCl₂·DME"]),
-            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=0.1, high=10, units="mol%"),
+                choices=["Pd(OAc)₂", "Pd(PPh₃)₄", "Pd₂(dba)₃", "PdCl₂(PPh₃)₂", "Pd(dppf)Cl₂"]),
+            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=0.05, high=0.5, units="mol%"),
             ChemicalParameter(name="Ligand", param_type="categorical", 
-                choices=["PPh₃", "SPhos", "XPhos", "RuPhos", "BINAP", "Xantphos", "dppf", "None"]),
+                choices=["PPh₃", "P(t-Bu)₃", "BINAP", "XPhos", "SPhos", "dppf", "Xantphos", "None"]),
+            ChemicalParameter(name="Ligand:Catalyst Ratio", param_type="continuous", low=0.5, high=5, units="L:M"),
             ChemicalParameter(name="Base", param_type="categorical", 
-                choices=["K₂CO₃", "Cs₂CO₃", "K₃PO₄", "KOH", "Et₃N", "KOt-Bu"]),
-            ChemicalParameter(name="Temperature", param_type="continuous", low=20, high=150, units="°C"),
-            ChemicalParameter(name="Time", param_type="continuous", low=0.5, high=48, units="h"),
+                choices=["K₂CO₃", "Cs₂CO₃", "K₃PO₄", "NaOt-Bu", "NEt₃", "KOAc", "K₃PO₄"]),
+            ChemicalParameter(name="Base Equiv", param_type="continuous", low=1, high=5, units="equiv"),
+            ChemicalParameter(name="Substrate A", param_type="continuous", low=1, high=1.0001, units="equiv"),
+            ChemicalParameter(name="Substrate B", param_type="continuous", low=1, high=5, units="equiv"),
+            ChemicalParameter(name="Temperature", param_type="continuous", low=25, high=100, units="°C"),
+            ChemicalParameter(name="Time", param_type="continuous", low=1, high=16, units="h"),
             ChemicalParameter(name="Solvent", param_type="categorical", 
-                choices=["Toluene", "THF", "1,4-Dioxane", "DMF", "DMSO", "MeCN", "2-MeTHF"]),
+                choices=["Toluene", "THF", "DCM", "DMF", "DMSO", "MeCN", "MeOH", "EtOH", "H₂O", "1,4-Dioxane"])
         ]
-        
     elif template_name == "oxidation":
         params = [
             ChemicalParameter(name="Oxidant", param_type="categorical", 
-                choices=["H₂O₂", "mCPBA", "TBHP", "NaOCl", "Oxone", "O₂", "TEMPO", "IBX", "DMP"]),
+                choices=["H₂O₂", "m-CPBA", "DMDO", "TBHP", "NaOCl", "O₂", "O₂/catalyst", "OsO₄/NMO"]),
             ChemicalParameter(name="Oxidant Equiv", param_type="continuous", low=1, high=5, units="equiv"),
             ChemicalParameter(name="Catalyst", param_type="categorical", 
-                choices=["None", "Cu(OAc)₂", "FeCl₃", "VO(acac)₂", "Mn(OAc)₃", "RuCl₃"]),
-            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=0, high=20, units="mol%"),
-            ChemicalParameter(name="Temperature", param_type="continuous", low=0, high=100, units="°C"),
-            ChemicalParameter(name="Time", param_type="continuous", low=0.5, high=24, units="h"),
+                choices=["None", "VO(acac)₂", "Mn(OAc)₃", "Fe(acac)₃", "RuCl₃", "KMnO₄", "SeO₂"]),
+            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=0.05, high=0.5, units="mol%"),
+            ChemicalParameter(name="Additive", param_type="categorical", 
+                choices=["None", "AcOH", "TFA", "Base", "Phase transfer catalyst"]),
+            ChemicalParameter(name="Substrate", param_type="continuous", low=1, high=1.0001, units="equiv"),
+            ChemicalParameter(name="Temperature", param_type="continuous", low=0, high=75, units="°C"),
+            ChemicalParameter(name="Time", param_type="continuous", low=0.5, high=16, units="h"),
             ChemicalParameter(name="Solvent", param_type="categorical", 
-                choices=["DCM", "MeCN", "Water", "Acetic Acid", "MeOH", "EtOH"])
+                choices=["DCM", "MeOH", "H₂O", "MeOH/H₂O", "DCM/H₂O", "Acetone", "AcOH"])
         ]
-        
     elif template_name == "reduction":
         params = [
             ChemicalParameter(name="Reductant", param_type="categorical", 
-                choices=["NaBH₄", "LiAlH₄", "DIBAL-H", "H₂", "Zn/HCl", "Na/NH₃", "SmI₂", "L-Selectride"]),
-            ChemicalParameter(name="Reductant Equiv", param_type="continuous", low=0.5, high=5, units="equiv"),
+                choices=["NaBH₄", "LiAlH₄", "DIBAL-H", "BH₃·THF", "H₂/Pd-C", "H₂/Pt", "H₂/Raney Ni", "Na/NH₃(l)"]),
+            ChemicalParameter(name="Reductant Equiv", param_type="continuous", low=1, high=5, units="equiv"),
             ChemicalParameter(name="Catalyst", param_type="categorical", 
-                choices=["None", "Pd/C", "Pt/C", "Raney Ni", "Rh/C", "PtO₂"]),
-            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=0, high=20, units="mol%"),
-            ChemicalParameter(name="Temperature", param_type="continuous", low=-78, high=80, units="°C"),
-            ChemicalParameter(name="Time", param_type="continuous", low=0.5, high=24, units="h"),
+                choices=["None", "Pd/C", "Pt/C", "Raney Ni", "RuCl₃", "Rh/Al₂O₃", "PtO₂"]),
+            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=0.05, high=0.5, units="mol%"),
+            ChemicalParameter(name="Temperature", param_type="continuous", low=0, high=100, units="°C"),
+            ChemicalParameter(name="Time", param_type="continuous", low=1, high=16, units="h"),
             ChemicalParameter(name="Solvent", param_type="categorical", 
-                choices=["THF", "Et₂O", "DCM", "MeOH", "EtOH", "EtOAc"])
+                choices=["THF", "Et₂O", "MeOH", "EtOH", "EtOAc", "DCM", "MeOH/DCM"])
         ]
-        
     elif template_name == "amide_coupling":
         params = [
             ChemicalParameter(name="Coupling Agent", param_type="categorical", 
-                choices=["EDC·HCl", "DCC", "PyBOP", "HATU", "TBTU", "T3P", "CDI", "COMU"]),
+                choices=["EDC·HCl", "DCC", "PyBOP", "HATU", "HBTU", "T3P", "CDI", "SOCl₂"]),
             ChemicalParameter(name="Coupling Agent Equiv", param_type="continuous", low=1, high=2, units="equiv"),
             ChemicalParameter(name="Additive", param_type="categorical", 
-                choices=["None", "HOBt", "HOAt", "DMAP", "6-Cl-HOBt", "Oxyma"]),
-            ChemicalParameter(name="Additive Equiv", param_type="continuous", low=0, high=1.5, units="equiv"),
+                choices=["None", "HOBt", "HOAt", "NHS", "DMAP", "Oxyma"]),
             ChemicalParameter(name="Base", param_type="categorical", 
-                choices=["DIPEA", "Et₃N", "NMM", "DMAP", "Pyridine", "K₂CO₃"]),
+                choices=["DIPEA", "NEt₃", "NMM", "DMAP", "Pyridine", "K₂CO₃"]),
             ChemicalParameter(name="Base Equiv", param_type="continuous", low=1, high=5, units="equiv"),
-            ChemicalParameter(name="Temperature", param_type="continuous", low=0, high=60, units="°C"),
-            ChemicalParameter(name="Time", param_type="continuous", low=1, high=48, units="h"),
+            ChemicalParameter(name="Acid", param_type="continuous", low=1, high=1.0001, units="equiv"),
+            ChemicalParameter(name="Amine", param_type="continuous", low=1, high=3, units="equiv"),  
+            ChemicalParameter(name="Temperature", param_type="continuous", low=0, high=50, units="°C"),
+            ChemicalParameter(name="Time", param_type="continuous", low=1, high=16, units="h"),
             ChemicalParameter(name="Solvent", param_type="categorical", 
-                choices=["DCM", "DMF", "THF", "MeCN", "DMSO"])
+                choices=["DCM", "DMF", "THF", "MeCN", "CHCl₃"])
         ]
-        
     elif template_name == "organocatalysis":
         params = [
-            ChemicalParameter(name="Organocatalyst", param_type="categorical", 
-                choices=["L-Proline", "MacMillan", "Cinchonidine", "Thiourea", "Squaramide", "DMAP", "Quinine"]),
-            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=1, high=30, units="mol%"),
+            ChemicalParameter(name="Catalyst", param_type="categorical", 
+                choices=["L-Proline", "MacMillan catalyst", "Cinchona alkaloid", "Thiourea", "Phosphoric acid", "DMAP", "Imidazole"]),
+            ChemicalParameter(name="Catalyst Loading", param_type="continuous", low=0.05, high=0.5, units="mol%"),
             ChemicalParameter(name="Additive", param_type="categorical", 
-                choices=["None", "Benzoic Acid", "TFA", "AcOH", "PhCOOH", "Imidazole"]),
-            ChemicalParameter(name="Additive Equiv", param_type="continuous", low=0, high=1, units="equiv"),
+                choices=["None", "AcOH", "TFA", "Benzoic acid", "Water", "MgCl₂", "ZnCl₂"]),
+            ChemicalParameter(name="Substrate A", param_type="continuous", low=1, high=1.0001, units="equiv"),
+            ChemicalParameter(name="Substrate B", param_type="continuous", low=1, high=5, units="equiv"),
             ChemicalParameter(name="Temperature", param_type="continuous", low=-20, high=60, units="°C"),
             ChemicalParameter(name="Time", param_type="continuous", low=4, high=96, units="h"),
             ChemicalParameter(name="Solvent", param_type="categorical", 
@@ -440,17 +452,32 @@ def load_template(self, template_name):
         if confirm != QMessageBox.Yes:
             return
             
+        # Clear existing parameters
         self.model.parameters = {}
     
-    for param in params:
-        self.model.add_parameter(param)
+    # Add each parameter from the template
+    try:
+        for param in params:
+            self.model.add_parameter(param)
+            
+        # Update UI elements
+        self.param_table.update_from_model(self.model)
+        update_parameter_combos(self)
         
-    self.param_table.update_from_model(self.model)
-    update_parameter_combos(self)
-    self.experiment_table.update_columns(self.model)
-    self.best_table.update_columns(self.model)
-    
-    log(self, f"-- Loaded {template_name} template with {len(params)} parameters - Success")
+        # Make sure experiment table and best results table are updated with new parameters
+        if hasattr(self, 'experiment_table'):
+            self.experiment_table.update_columns(self.model)
+        if hasattr(self, 'best_table'):
+            self.best_table.update_columns(self.model)
+        
+        # Log success message
+        log(self, f"-- Loaded {template_name} template with {len(params)} parameters - Success")
+    except Exception as e:
+        import traceback
+        error_msg = f"Error loading template: {str(e)}"
+        traceback.print_exc()
+        log(self, f"-- {error_msg} - Error")
+        QMessageBox.critical(self, "Error", error_msg)
 
 def add_substrate_parameter(self):
     substrate_name, ok = QInputDialog.getText(self, "Add Substrate", "Enter substrate name:")
@@ -509,11 +536,13 @@ def generate_initial_experiments(self):
         # Update model's design method
         self.model.design_method = method
         
+        # Clear any existing planned experiments
         if hasattr(self.model, 'planned_experiments'):
             self.model.planned_experiments = []
         else:
             self.model.planned_experiments = []
             
+        # Reset round indices
         self.round_start_indices = []
         
         # Call the appropriate suggestion method based on design method
@@ -536,6 +565,7 @@ def generate_initial_experiments(self):
             
         self.model.planned_experiments = suggestions
         self.current_round = 1
+        self.current_round_label.setText("1")
         
         # Update the UI
         update_ui_from_model(self)
@@ -548,79 +578,97 @@ def generate_initial_experiments(self):
         self.log(f"-- Failed to generate experiments: {str(e)} - Error")
 
 def generate_next_experiments(self):
-    if not self.model.experiments:
-        QMessageBox.warning(self, "Warning", "No experiment results yet.")
-        return
-        
+    """Generate the next round of experiments"""
+    from ..core import settings
+    
+    # Get number of new experiments to generate
     n_next = self.n_next_spin.value()
+    
+    # Set exploitation weight based on slider
     exploitation_weight = self.exploit_slider.value() / 100.0
+    self.model.exploitation_weight = exploitation_weight
     
     try:
-        # Clear any lingering cache that could cause issues
-        if hasattr(self.model, 'clear_surrogate_cache'):
-            self.model.clear_surrogate_cache()
+        # Store initial count for tracking
+        initial_count = len(self.model.planned_experiments)
+        print(f"Before adding: {initial_count} planned experiments")
         
-        # Save old weight in case we need to restore it
-        old_weight = self.model.exploitation_weight
-        self.model.exploitation_weight = exploitation_weight
+        # Generate new suggestions
+        method = self.design_method_combo.currentText().lower()
         
-        # Generate next experiments
-        suggestions = self.model.suggest_experiments(n_suggestions=n_next)
+        # Get start time for performance measurement
+        import time
+        start_time = time.time()
         
-        if not suggestions:
-            raise ValueError("No valid suggestions generated")
+        # Call the appropriate suggestion method based on design method
+        if method == "botorch":
+            suggestions = self.model._suggest_with_botorch(n_next)
+        elif method == "tpe":
+            suggestions = self.model._suggest_with_tpe(n_next)
+        elif method == "gpei":
+            suggestions = self.model._suggest_with_gp(n_next)
+        elif method == "random":
+            suggestions = self.model._suggest_random(n_next)
+        elif method == "latin hypercube":
+            suggestions = self.model._suggest_with_lhs(n_next)
+        elif method == "sobol":
+            suggestions = self.model._suggest_with_sobol(n_next)
+        else:
+            # Default to BoTorch if method not recognized
+            self.log(f"-- Unknown design method '{method}', using BoTorch - Warning")
+            suggestions = self.model._suggest_with_botorch(n_next)
             
-        # Add to planned experiments
-        if not hasattr(self, 'round_start_indices'):
-            self.round_start_indices = []
-            
-        self.round_start_indices.append(len(self.model.planned_experiments))
-        
-        # Debug output before adding to planned experiments
-        print(f"Before adding: {len(self.model.planned_experiments)} planned experiments")
-        print(f"Adding {len(suggestions)} new suggestions")
-        
-        # Add the suggestions
+        # Add suggestions to planned experiments
         self.model.planned_experiments.extend(suggestions)
         
-        # Debug output after adding
-        print(f"After adding: {len(self.model.planned_experiments)} planned experiments")
-        print(f"Round start indices: {self.round_start_indices}")
+        # Log timing
+        elapsed = time.time() - start_time
+        self.log(f"-- Generated {n_next} suggestions in {elapsed:.2f}s")
         
-        # Update round counter and UI
-        self.current_round += 1
-        self.current_round_label.setText(str(self.current_round))
+        final_count = len(self.model.planned_experiments)
+        print(f"After adding: {final_count} planned experiments")
         
-        # Make sure experiment table columns match parameter structure
-        self.experiment_table.update_columns(self.model)
-        
-        # Update experiment table display with new experiments
-        self.experiment_table.update_from_planned(self.model, self.round_start_indices)
-        
-        # Debug table state
-        if hasattr(self.experiment_table, 'debug_table_state'):
-            self.experiment_table.debug_table_state()
-        
-        # Verify data made it to the table by checking row count
-        expected_rows = len(self.model.planned_experiments) + len(self.round_start_indices)
-        if self.experiment_table.rowCount() < expected_rows * 0.8:  # Allow some margin for error
-            print(f"WARNING: Table has fewer rows ({self.experiment_table.rowCount()}) than expected ({expected_rows})")
-            # Force layout update
-            self.experiment_table.resizeColumnsToContents()
-            self.experiment_table.resizeRowsToContents()
-            self.experiment_table.update()
-        
-        # Log success
-        self.log(f"-- Generated {n_next} experiments for round {self.current_round} - Success")
-        
+        # If suggestions were returned, update UI
+        if suggestions and len(suggestions) > 0:
+            print(f"Generated {len(suggestions)} new suggestions")
+            
+            # Update round start indices - record the index where the new round starts
+            self.round_start_indices.append(initial_count)
+            
+            # Increment round number
+            self.current_round += 1
+            self.current_round_label.setText(str(self.current_round))
+            
+            # Update experiment table
+            self.experiment_table.update_from_planned(self.model, self.round_start_indices)
+            
+            log(self, f"-- Generated {n_next} experiments for round {self.current_round} - Success")
+        else:
+            # Handle case where no suggestions were returned
+            log(self, f"-- No experiments generated. Check parameters and try again - Warning")
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
-        self.log(f"-- Failed to generate experiments: {str(e)} - Error")
-        print(f"Error details: {error_details}")
+        log(self, f"-- Failed to generate experiments: {str(e)} - Error")
         
-        # Restore old exploitation weight
-        self.model.exploitation_weight = old_weight
+        # Show error dialog to user with helpful message
+        from PySide6.QtWidgets import QMessageBox
+        error_box = QMessageBox(self)
+        error_box.setIcon(QMessageBox.Critical)
+        error_box.setWindowTitle("Error Generating Experiments")
+        error_box.setText("Failed to generate next experiments")
+        
+        # Provide a more specific message based on the error type
+        if "X_pending" in str(e):
+            error_box.setInformativeText(
+                "The optimization algorithm encountered an issue with the BoTorch library. "
+                "This is likely due to version compatibility. Trying with a different method."
+            )
+        else:
+            error_box.setInformativeText("The optimization algorithm encountered an error. Let's try a different approach.")
+            
+        error_box.setDetailedText(error_details)
+        error_box.exec()
 
 def add_result_for_selected(self):
     """Add result for selected experiment with enhanced error detection and reporting."""
@@ -695,8 +743,8 @@ def add_result_for_selected(self):
         
         if existing_exp:
             confirm = QMessageBox.question(self, "Confirm", 
-                                f"Result already exists for experiment #{exp_id+1}. Replace it?",
-                                QMessageBox.Yes | QMessageBox.No)
+                            f"Result already exists for experiment #{exp_id+1}. Replace it?",
+                            QMessageBox.Yes | QMessageBox.No)
             if confirm == QMessageBox.No:
                 return
                 
@@ -717,16 +765,13 @@ def add_result_for_selected(self):
             dialog.result['score'] = score
             print(f"Calculated score: {score}")
             
-            # Update table
-            print("Updating experiment table")
+            # Update experiment table and highlight result
             self.experiment_table.update_from_planned(self.model, self.round_start_indices)
             
-            # Update best results
-            if hasattr(self, 'best_table'):
-                print("Updating best results table")
-                self.best_table.update_from_model(self.model, self.n_best_spin.value())
-                
-            # Update log
+            # Update all result tables using the central update method
+            self.update_result_tables()
+            
+            # Log success
             self.log(f"-- Added result for experiment #{exp_id+1} - Success")
     except Exception as e:
         import traceback
@@ -1587,7 +1632,7 @@ def show_optimization_settings(self):
 def show_preferences(self):
     prefs_dialog = QDialog(self)
     prefs_dialog.setWindowTitle("Preferences")
-    prefs_dialog.resize(500, 400)
+    prefs_dialog.resize(550, 450)
     
     layout = QVBoxLayout(prefs_dialog)
     
@@ -1622,6 +1667,166 @@ def show_preferences(self):
     display_layout.addRow("UI Font Size:", font_size_spin)
     
     tabs.addTab(display_tab, "Display")
+    
+    # Add Experiment Design tab with logical unit rounding settings
+    design_tab = QWidget()
+    design_layout = QVBoxLayout(design_tab)
+    
+    # Logical unit rounding settings
+    logical_units_box = QGroupBox("Logical Unit Rounding")
+    logical_units_layout = QFormLayout(logical_units_box)
+    
+    use_logical_units = QCheckBox("Use logical unit rounding for experiment parameters")
+    use_logical_units.setChecked(settings.use_logical_units)
+    logical_units_layout.addRow(use_logical_units)
+    
+    shrink_intervals = QCheckBox("Progressively shrink intervals during optimization")
+    shrink_intervals.setChecked(settings.shrink_intervals)
+    logical_units_layout.addRow(shrink_intervals)
+    
+    shrink_factor = QDoubleSpinBox()
+    shrink_factor.setRange(0.1, 0.9)
+    shrink_factor.setSingleStep(0.05)
+    shrink_factor.setDecimals(2)
+    shrink_factor.setValue(settings.interval_shrink_factor)
+    logical_units_layout.addRow("Interval Shrink Factor:", shrink_factor)
+    
+    experiments_before_shrinking = QSpinBox()
+    experiments_before_shrinking.setRange(5, 50)
+    experiments_before_shrinking.setValue(settings.experiments_before_shrinking)
+    logical_units_layout.addRow("Experiments Before Shrinking:", experiments_before_shrinking)
+    
+    # Parameter interval table
+    parameter_intervals_label = QLabel("Parameter Type Intervals:")
+    parameter_intervals_layout = QGridLayout()
+    parameter_intervals_layout.addWidget(QLabel("<b>Parameter Type</b>"), 0, 0)
+    parameter_intervals_layout.addWidget(QLabel("<b>Interval</b>"), 0, 1)
+    parameter_intervals_layout.addWidget(QLabel("<b>Min</b>"), 0, 2)
+    parameter_intervals_layout.addWidget(QLabel("<b>Max</b>"), 0, 3)
+    
+    # Time settings
+    parameter_intervals_layout.addWidget(QLabel("Time (h)"), 1, 0)
+    time_interval = QDoubleSpinBox()
+    time_interval.setRange(0.05, 1.0)
+    time_interval.setSingleStep(0.05)
+    time_interval.setDecimals(2)
+    time_interval.setValue(settings.param_rounding["time"]["interval"])
+    parameter_intervals_layout.addWidget(time_interval, 1, 1)
+    
+    time_min = QDoubleSpinBox()
+    time_min.setRange(0.1, 10.0)
+    time_min.setSingleStep(0.5)
+    time_min.setDecimals(1)
+    time_min.setValue(settings.param_rounding["time"]["min"])
+    parameter_intervals_layout.addWidget(time_min, 1, 2)
+    
+    time_max = QDoubleSpinBox()
+    time_max.setRange(5.0, 48.0)
+    time_max.setSingleStep(1.0)
+    time_max.setDecimals(1)
+    time_max.setValue(settings.param_rounding["time"]["max"])
+    parameter_intervals_layout.addWidget(time_max, 1, 3)
+    
+    # Temperature settings
+    parameter_intervals_layout.addWidget(QLabel("Temperature (°C)"), 2, 0)
+    temp_interval = QDoubleSpinBox()
+    temp_interval.setRange(1.0, 25.0)
+    temp_interval.setSingleStep(5.0)
+    temp_interval.setDecimals(0)
+    temp_interval.setValue(settings.param_rounding["temperature"]["interval"])
+    parameter_intervals_layout.addWidget(temp_interval, 2, 1)
+    
+    temp_min = QDoubleSpinBox()
+    temp_min.setRange(-20.0, 50.0)
+    temp_min.setSingleStep(5.0)
+    temp_min.setDecimals(0)
+    temp_min.setValue(settings.param_rounding["temperature"]["min"])
+    parameter_intervals_layout.addWidget(temp_min, 2, 2)
+    
+    temp_max = QDoubleSpinBox()
+    temp_max.setRange(50.0, 150.0)
+    temp_max.setSingleStep(5.0)
+    temp_max.setDecimals(0)
+    temp_max.setValue(settings.param_rounding["temperature"]["max"])
+    parameter_intervals_layout.addWidget(temp_max, 2, 3)
+    
+    # Equivalents settings
+    parameter_intervals_layout.addWidget(QLabel("Equivalents (eq)"), 3, 0)
+    equiv_interval = QDoubleSpinBox()
+    equiv_interval.setRange(0.1, 1.0)
+    equiv_interval.setSingleStep(0.1)
+    equiv_interval.setDecimals(1)
+    equiv_interval.setValue(settings.param_rounding["eq"]["interval"])
+    parameter_intervals_layout.addWidget(equiv_interval, 3, 1)
+    
+    equiv_min = QDoubleSpinBox()
+    equiv_min.setRange(0.1, 2.0)
+    equiv_min.setSingleStep(0.5)
+    equiv_min.setDecimals(1)
+    equiv_min.setValue(settings.param_rounding["eq"]["min"])
+    parameter_intervals_layout.addWidget(equiv_min, 3, 2)
+    
+    equiv_max = QDoubleSpinBox()
+    equiv_max.setRange(2.0, 10.0)
+    equiv_max.setSingleStep(0.5)
+    equiv_max.setDecimals(1)
+    equiv_max.setValue(settings.param_rounding["eq"]["max"])
+    parameter_intervals_layout.addWidget(equiv_max, 3, 3)
+    
+    # Catalyst loading settings
+    parameter_intervals_layout.addWidget(QLabel("Catalyst Loading (mol%)"), 4, 0)
+    cat_interval = QDoubleSpinBox()
+    cat_interval.setRange(0.01, 0.25)
+    cat_interval.setSingleStep(0.01)
+    cat_interval.setDecimals(2)
+    cat_interval.setValue(settings.param_rounding["catalyst"]["interval"])
+    parameter_intervals_layout.addWidget(cat_interval, 4, 1)
+    
+    cat_min = QDoubleSpinBox()
+    cat_min.setRange(0.01, 0.25)
+    cat_min.setSingleStep(0.05)
+    cat_min.setDecimals(2)
+    cat_min.setValue(settings.param_rounding["catalyst"]["min"])
+    parameter_intervals_layout.addWidget(cat_min, 4, 2)
+    
+    cat_max = QDoubleSpinBox()
+    cat_max.setRange(0.1, 5.0)
+    cat_max.setSingleStep(0.1)
+    cat_max.setDecimals(2)
+    cat_max.setValue(settings.param_rounding["catalyst"]["max"])
+    parameter_intervals_layout.addWidget(cat_max, 4, 3)
+    
+    # Concentration settings
+    parameter_intervals_layout.addWidget(QLabel("Concentration (M)"), 5, 0)
+    conc_interval = QDoubleSpinBox()
+    conc_interval.setRange(0.05, 0.5)
+    conc_interval.setSingleStep(0.05)
+    conc_interval.setDecimals(2)
+    conc_interval.setValue(settings.param_rounding["concentration"]["interval"])
+    parameter_intervals_layout.addWidget(conc_interval, 5, 1)
+    
+    conc_min = QDoubleSpinBox()
+    conc_min.setRange(0.05, 0.5)
+    conc_min.setSingleStep(0.05)
+    conc_min.setDecimals(2)
+    conc_min.setValue(settings.param_rounding["concentration"]["min"])
+    parameter_intervals_layout.addWidget(conc_min, 5, 2)
+    
+    conc_max = QDoubleSpinBox()
+    conc_max.setRange(0.5, 3.0)
+    conc_max.setSingleStep(0.1)
+    conc_max.setDecimals(1)
+    conc_max.setValue(settings.param_rounding["concentration"]["max"])
+    parameter_intervals_layout.addWidget(conc_max, 5, 3)
+    
+    # Add parameter rounding settings to layout
+    logical_units_layout.addRow(parameter_intervals_label)
+    logical_units_layout.addRow(parameter_intervals_layout)
+    
+    design_layout.addWidget(logical_units_box)
+    design_layout.addStretch()
+    
+    tabs.addTab(design_tab, "Experiment Design")
     
     model_tab = QWidget()
     model_layout = QFormLayout(model_tab)
@@ -1666,10 +1871,48 @@ def show_preferences(self):
     layout.addLayout(button_box)
     
     if prefs_dialog.exec():
+        # Display settings
         settings.auto_round = auto_round_check.isChecked()
         settings.rounding_precision = precision_spin.value()
         settings.smart_rounding = smart_round_check.isChecked()
         
+        # Logical unit settings
+        settings.use_logical_units = use_logical_units.isChecked()
+        settings.shrink_intervals = shrink_intervals.isChecked()
+        settings.interval_shrink_factor = shrink_factor.value()
+        settings.experiments_before_shrinking = experiments_before_shrinking.value()
+        
+        # Update parameter rounding settings
+        settings.param_rounding["time"]["interval"] = time_interval.value()
+        settings.param_rounding["time"]["min"] = time_min.value()
+        settings.param_rounding["time"]["max"] = time_max.value()
+        
+        settings.param_rounding["temperature"]["interval"] = temp_interval.value()
+        settings.param_rounding["temperature"]["min"] = temp_min.value()
+        settings.param_rounding["temperature"]["max"] = temp_max.value()
+        
+        settings.param_rounding["eq"]["interval"] = equiv_interval.value()
+        settings.param_rounding["eq"]["min"] = equiv_min.value()
+        settings.param_rounding["eq"]["max"] = equiv_max.value()
+        settings.param_rounding["equiv"]["interval"] = equiv_interval.value()
+        settings.param_rounding["equiv"]["min"] = equiv_min.value()
+        settings.param_rounding["equiv"]["max"] = equiv_max.value()
+        
+        settings.param_rounding["catalyst"]["interval"] = cat_interval.value()
+        settings.param_rounding["catalyst"]["min"] = cat_min.value()
+        settings.param_rounding["catalyst"]["max"] = cat_max.value()
+        settings.param_rounding["load"]["interval"] = cat_interval.value()
+        settings.param_rounding["load"]["min"] = cat_min.value()
+        settings.param_rounding["load"]["max"] = cat_max.value()
+        
+        settings.param_rounding["concentration"]["interval"] = conc_interval.value()
+        settings.param_rounding["concentration"]["min"] = conc_min.value()
+        settings.param_rounding["concentration"]["max"] = conc_max.value()
+        settings.param_rounding["conc"]["interval"] = conc_interval.value()
+        settings.param_rounding["conc"]["min"] = conc_min.value()
+        settings.param_rounding["conc"]["max"] = conc_max.value()
+        
+        # Update model settings
         self.auto_round_check.setChecked(settings.auto_round)
         self.precision_spin.setValue(settings.rounding_precision)
         self.smart_round_check.setChecked(settings.smart_rounding)

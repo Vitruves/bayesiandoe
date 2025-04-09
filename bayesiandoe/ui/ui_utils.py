@@ -39,12 +39,15 @@ def update_parameter_combos(self):
     viz_param = self.viz_param_combo.currentText() if self.viz_param_combo.count() > 0 else ""
     x_param = self.x_param_combo.currentText() if self.x_param_combo.count() > 0 else ""
     y_param = self.y_param_combo.currentText() if self.y_param_combo.count() > 0 else ""
+    link_param = self.link_param_combo.currentText() if hasattr(self, 'link_param_combo') and self.link_param_combo.count() > 0 else ""
     
     if hasattr(self, 'prior_param_combo'):
         self.prior_param_combo.clear()
     self.viz_param_combo.clear()
     self.x_param_combo.clear()
     self.y_param_combo.clear()
+    if hasattr(self, 'link_param_combo'):
+        self.link_param_combo.clear()
     
     param_names = list(self.model.parameters.keys())
     
@@ -53,6 +56,8 @@ def update_parameter_combos(self):
     self.viz_param_combo.addItems(param_names)
     self.x_param_combo.addItems(param_names)
     self.y_param_combo.addItems(param_names)
+    if hasattr(self, 'link_param_combo'):
+        self.link_param_combo.addItems(param_names)
     
     if prior_param in param_names and hasattr(self, 'prior_param_combo'):
         self.prior_param_combo.setCurrentText(prior_param)
@@ -65,6 +70,9 @@ def update_parameter_combos(self):
         
     if y_param in param_names:
         self.y_param_combo.setCurrentText(y_param)
+        
+    if link_param in param_names and hasattr(self, 'link_param_combo'):
+        self.link_param_combo.setCurrentText(link_param)
         
     if hasattr(self, 'prior_param_combo') and self.prior_param_combo.count() > 0:
         update_prior_ui(self)

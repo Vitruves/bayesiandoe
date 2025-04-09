@@ -6,7 +6,7 @@ from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QRect
 from PySide6.QtGui import QPixmap, QFont, QIcon, QColor, QPainter, QBrush, QPen, QLinearGradient, QImage
 from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QSplashScreen, QFrame, QHeaderView,
-    QLabel
+    QLabel, QMessageBox
 )
 from ..core import _calculate_parameter_distance, settings
 from concurrent.futures import ThreadPoolExecutor
@@ -21,7 +21,7 @@ class LogDisplay:
 
 class SplashScreen(QSplashScreen):
     def __init__(self):
-        self.splash_pix = QPixmap(800, 600)
+        self.splash_pix = QPixmap(700, 500)
         self.splash_pix.fill(Qt.transparent)
         
         super().__init__(self.splash_pix, Qt.WindowStaysOnTopHint | Qt.FramelessWindowHint)
@@ -199,7 +199,7 @@ class ExperimentTable(QTableWidget):
         super().__init__(parent)
         self.setSortingEnabled(True)
         self.setSelectionBehavior(QTableWidget.SelectRows)
-        self.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed)
         
         # Add a direct reference to store the model
         self.model = None
@@ -208,6 +208,9 @@ class ExperimentTable(QTableWidget):
         self.executor = ThreadPoolExecutor(max_workers=1)
         self._prediction_start_time = 0
         self._prediction_future = None
+        
+        # Connect to cell change events
+        self.cellChanged.connect(self.handle_cell_change)
         
     def update_columns(self, model):
         # Store reference to the model
@@ -227,23 +230,209 @@ class ExperimentTable(QTableWidget):
         # Set up objectives columns to be resizable to content
         for i in range(2 + len(model.parameters), len(columns)-1):
             self.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+            
+            # Add visual cue for editable objective columns
+            obj_header = self.horizontalHeaderItem(i)
+            if obj_header:
+                obj_name = obj_header.text()
+                obj_header.setText(f"{obj_name}*")
+                obj_header.setToolTip(f"Double-click to edit {obj_name} value")
+                obj_header.setBackground(QColor(240, 255, 240))  # Light green background
         
         # Set up prediction column
         predict_col = len(columns) - 1
         self.horizontalHeader().setSectionResizeMode(predict_col, QHeaderView.ResizeToContents)
         
+        # Store column indices for faster access
+        self.param_columns_start = 2
+        self.param_columns_end = 2 + len(model.parameters) - 1
+        self.objective_columns_start = 2 + len(model.parameters)
+        self.objective_columns_end = self.objective_columns_start + len(model.objectives) - 1
+        
+        # Add a tooltip to the table view
+        self.setToolTip("Double-click on result cells to enter values directly")
+        
+        # Style the table to indicate editable columns
+        self.setStyleSheet("""
+            QTableWidget::item:hover {
+                background-color: rgba(240, 255, 240, 100);
+                border: 1px solid #4CAF50;
+            }
+        """)
+
+    def handle_cell_change(self, row, column):
+        """Handle cell value changes - specifically for entering results"""
+        try:
+            # Only process if we have a valid model
+            if not self.model:
+                return
+                
+            # Only handle changes in objective columns
+            if column < self.objective_columns_start or column > self.objective_columns_end:
+                return
+                
+            # Identify which experiment this is
+            id_item = self.item(row, 1)
+            if not id_item or not id_item.text().isdigit():
+                return
+                
+            exp_id = int(id_item.text()) - 1
+            if exp_id < 0 or exp_id >= len(self.model.planned_experiments):
+                return
+                
+            # Get value that was entered
+            result_item = self.item(row, column)
+            if not result_item:
+                return
+                
+            result_text = result_item.text().strip()
+            if not result_text:
+                return
+                
+            # Parse the value (handle percentage signs)
+            try:
+                result_value = float(result_text.replace('%', '').strip())
+                # If value is > 1 and not a percentage sign, assume it's a percentage
+                if result_value > 1.0 and not '%' in result_text:
+                    result_value = result_value / 100.0
+                else:
+                    result_value = result_value / 100.0  # Always convert to 0-1 scale
+            except ValueError:
+                # Restore previous value or clear cell
+                QMessageBox.warning(self, "Invalid Value", 
+                                  "Please enter a valid number (e.g., 78.5 or 78.5%)")
+                if result_item:
+                    self.blockSignals(True)
+                    result_item.setText("")
+                    self.blockSignals(False)
+                return
+                
+            # Get which objective this is
+            column_idx = column - self.objective_columns_start
+            if column_idx < 0 or column_idx >= len(self.model.objectives):
+                return
+                
+            objective_name = self.model.objectives[column_idx]
+            
+            # Either update existing experiment or create new one
+            exp_params = self.model.planned_experiments[exp_id]
+            
+            # Check if result already exists
+            existing_exp = None
+            for i, exp in enumerate(self.model.experiments):
+                if 'params' not in exp:
+                    continue
+                    
+                # Count matching parameters
+                matching_params = 0
+                total_params = 0
+                for k, v in exp_params.items():
+                    if k in exp['params']:
+                        total_params += 1
+                        if isinstance(v, float):
+                            # For floats, allow small differences
+                            if abs(float(exp['params'][k]) - float(v)) < 1e-6:
+                                matching_params += 1
+                        elif exp['params'][k] == v:
+                            matching_params += 1
+                
+                # If all parameters match, consider it the same experiment
+                if matching_params == total_params and total_params > 0:
+                    existing_exp = exp
+                    break
+            
+            if existing_exp:
+                # Update existing result
+                existing_exp['results'][objective_name] = result_value
+                print(f"Updated existing result for experiment #{exp_id+1}, {objective_name}={result_value:.4f}")
+                
+                # Recalculate score
+                score = self.model._calculate_composite_score(existing_exp['results'])
+                existing_exp['score'] = score
+                
+                # Format cell with proper percentage
+                self.blockSignals(True)
+                result_item.setText(f"{result_value*100:.2f}%")
+                result_item.setBackground(QColor(224, 255, 224))
+                self.blockSignals(False)
+                
+                # Update other cells in the row with any other objective values
+                for i, obj in enumerate(self.model.objectives):
+                    if obj != objective_name and obj in existing_exp['results']:
+                        obj_col = self.objective_columns_start + i
+                        obj_item = self.item(row, obj_col)
+                        if obj_item:
+                            self.blockSignals(True)
+                            obj_item.setText(f"{existing_exp['results'][obj]*100:.2f}%")
+                            obj_item.setBackground(QColor(224, 255, 224))
+                            self.blockSignals(False)
+            else:
+                # Create new result
+                from datetime import datetime
+                
+                results = {objective_name: result_value}
+                
+                new_exp = {
+                    'params': exp_params,
+                    'results': results,
+                    'timestamp': datetime.now().isoformat()
+                }
+                
+                # Calculate composite score
+                score = self.model._calculate_composite_score(results)
+                new_exp['score'] = score
+                
+                # Add to experiments
+                self.model.experiments.append(new_exp)
+                print(f"Added new result for experiment #{exp_id+1}, {objective_name}={result_value:.4f}")
+                
+                # Format cell with proper percentage
+                self.blockSignals(True)
+                result_item.setText(f"{result_value*100:.2f}%")
+                result_item.setBackground(QColor(224, 255, 224))
+                self.blockSignals(False)
+                
+                # Highlight the entire row
+                for col in range(self.columnCount()):
+                    item = self.item(row, col)
+                    if item:
+                        item.setBackground(QColor(224, 255, 224))
+            
+            # Notify parent of the change so it can update other tables
+            parent = self.parent()
+            while parent and not hasattr(parent, 'update_result_tables'):
+                parent = parent.parent()
+                
+            if parent and hasattr(parent, 'update_result_tables'):
+                parent.update_result_tables()
+                
+            # Log the update
+            self.log(f"-- Added result for experiment #{exp_id+1}: {objective_name}={result_value*100:.2f}% - Success")
+                
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"Error handling cell change: {e}")
+            print(error_details)
+    
     def update_from_planned(self, model, round_start_indices):
         """Update experiment table from planned experiments with debug info."""
         try:
-            if not hasattr(model, 'planned_experiments') or not model.planned_experiments:
+            # Block signals during bulk update
+            self.blockSignals(True)
+            
+            if not hasattr(model, 'planned_experiments'):
+                model.planned_experiments = []
+                print("Initialized empty planned_experiments list")
+                
+            if not model.planned_experiments:
                 print("No planned experiments found")
+                self.blockSignals(False)
                 return
             
             print(f"Updating table with {len(model.planned_experiments)} planned experiments")
             print(f"Round start indices: {round_start_indices}")
             
-            # Block signals during update
-            self.blockSignals(True)
             self.setSortingEnabled(False)
             
             # Save current scroll position and selection
@@ -267,12 +456,20 @@ class ExperimentTable(QTableWidget):
             
             # Map experiment ID to round number
             exp_to_round = {}
-            current_round = 0
+            current_round = 1  # Start from round 1 instead of 0
             
+            # Create a sorted list of round start indices for easier processing
+            round_boundaries = sorted(round_start_indices)
+            
+            # Assign rounds to experiments
             for i, _ in enumerate(model.planned_experiments):
-                if current_round < len(round_start_indices) and i >= round_start_indices[current_round]:
-                    current_round += 1
-                exp_to_round[i] = current_round
+                # Determine round based on round_start_indices
+                round_num = 1
+                for r, start_idx in enumerate(round_boundaries):
+                    if i >= start_idx:
+                        round_num = r + 2  # +2 because round 1 is before the first boundary
+                
+                exp_to_round[i] = round_num
             
             # Track row index for each experiment
             exp_id_to_row = {}
@@ -280,7 +477,7 @@ class ExperimentTable(QTableWidget):
             
             # Fill table with experiments
             for i, params in enumerate(model.planned_experiments):
-                round_num = exp_to_round.get(i, 0)
+                round_num = exp_to_round.get(i, 1)  # Default to round 1
                 
                 # Add round separator if needed
                 if current_display_round != round_num:
@@ -313,11 +510,13 @@ class ExperimentTable(QTableWidget):
                 font = round_item.font()
                 font.setBold(True)
                 round_item.setFont(font)
+                round_item.setFlags(round_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
                 self.setItem(row_index, 0, round_item)
                 
                 # Add experiment ID
                 id_item = QTableWidgetItem(str(i + 1))
                 id_item.setTextAlignment(Qt.AlignCenter)
+                id_item.setFlags(id_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
                 self.setItem(row_index, 1, id_item)
                 
                 # Add parameter values
@@ -332,11 +531,24 @@ class ExperimentTable(QTableWidget):
                             value_str = str(value)
                     param_item = QTableWidgetItem(value_str)
                     param_item.setTextAlignment(Qt.AlignCenter if isinstance(params.get(param_name), (int, float)) else Qt.AlignLeft)
+                    param_item.setFlags(param_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
                     self.setItem(row_index, col, param_item)
                 
-                # Initialize objective and prediction columns with empty cells
-                for col_idx in range(2 + len(model.parameters), self.columnCount()):
-                    self.setItem(row_index, col_idx, QTableWidgetItem(""))
+                # Initialize objective columns with empty editable cells
+                for obj_idx, obj_name in enumerate(model.objectives):
+                    obj_col = self.objective_columns_start + obj_idx
+                    obj_item = QTableWidgetItem("")
+                    obj_item.setTextAlignment(Qt.AlignCenter)
+                    # Add visual styling to indicate these cells are editable
+                    obj_item.setToolTip(f"Double-click to enter {obj_name} result")
+                    # These cells should be editable
+                    self.setItem(row_index, obj_col, obj_item)
+                
+                # Initialize prediction column with empty non-editable cell
+                predict_col = self.columnCount() - 1
+                predict_item = QTableWidgetItem("")
+                predict_item.setFlags(predict_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
+                self.setItem(row_index, predict_col, predict_item)
             
             print(f"Added {len(exp_id_to_row)} experiment rows to table")
             
@@ -357,15 +569,14 @@ class ExperimentTable(QTableWidget):
                     
                     # Add result values for each objective
                     if "results" in exp_data:
-                        objective_base_col = 2 + len(model.parameters)
                         for obj_idx, obj_name in enumerate(model.objectives):
+                            obj_col = self.objective_columns_start + obj_idx
                             if obj_name in exp_data["results"] and exp_data["results"][obj_name] is not None:
-                                if objective_base_col + obj_idx < self.columnCount():
-                                    obj_value = exp_data["results"][obj_name] * 100.0
-                                    obj_item = QTableWidgetItem(f"{obj_value:.2f}%")
-                                    obj_item.setTextAlignment(Qt.AlignCenter)
-                                    obj_item.setBackground(QColor(224, 255, 224))
-                                    self.setItem(row_index, objective_base_col + obj_idx, obj_item)
+                                obj_value = exp_data["results"][obj_name] * 100.0
+                                obj_item = QTableWidgetItem(f"{obj_value:.2f}%")
+                                obj_item.setTextAlignment(Qt.AlignCenter)
+                                obj_item.setBackground(QColor(224, 255, 224))
+                                self.setItem(row_index, obj_col, obj_item)
             
             print(f"Processed {len(completed_indices)} completed experiments")
             
@@ -386,6 +597,7 @@ class ExperimentTable(QTableWidget):
             import traceback
             print(f"Error in update_from_planned: {e}")
             traceback.print_exc()
+            self.blockSignals(False)
 
     def _find_matching_planned_experiment(self, model, exp_data, completed_indices):
         """Find the planned experiment that matches the experiment data."""

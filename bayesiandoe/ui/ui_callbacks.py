@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QColor
 from .ui_utils import log, update_ui_from_model, update_prior_table
 from .ui_visualization import update_prior_plot
-from .dialogs import PriorDialog
+from .dialogs import PriorDialog, ParameterLinkDialog
 
 def update_objectives(self):
     """Update the objectives and weights from the UI controls"""
@@ -223,6 +223,15 @@ def on_param_button_clicked(self, param_name):
         update_prior_table(self)
         if self.viz_param_combo.currentText() == param_name:
             update_prior_plot(self)
+
+def show_parameter_links(self, param_name):
+    """Show and manage parameter links dialog."""
+    if not param_name or param_name not in self.model.parameters:
+        return
+        
+    dialog = ParameterLinkDialog(self, self.model, param_name)
+    dialog.exec()
+    log(self, f"-- Parameter links updated for {param_name} - Success")
 
 def show_design_method_help(self):
     """Show a dialog to help users choose the best design method."""

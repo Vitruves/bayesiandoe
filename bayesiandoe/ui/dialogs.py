@@ -1,11 +1,11 @@
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QGridLayout,
     QLabel, QPushButton, QLineEdit, QSpinBox, QDoubleSpinBox, 
     QRadioButton, QGroupBox, QComboBox, QCheckBox, QTextEdit,
     QMessageBox, QSlider, QFrame, QTableWidget, QTableWidgetItem,
-    QScrollArea, QListWidget, QTabWidget, QWidget
+    QScrollArea, QListWidget, QTabWidget, QWidget, QHeaderView
 )
 from ..visualizations import plot_parameter_importance
 from .canvas import MplCanvas
@@ -710,3 +710,273 @@ class OptimizationSettingsDialog(QDialog):
         self.model.exploration_noise = self.noise_spin.value()
         
         super().accept()
+
+class ParameterLinkDialog(QDialog):
+    def __init__(self, parent=None, model=None, param_name=None):
+        super().__init__(parent)
+        self.model = model
+        self.param_name = param_name
+        
+        if not param_name or param_name not in model.parameters:
+            self.reject()
+            return
+            
+        self.param = model.parameters[param_name]
+        
+        self.setWindowTitle(f"Parameter Links for {param_name}")
+        self.resize(700, 500)
+        self.setup_ui()
+        
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        
+        info_label = QLabel(
+            "Parameter linking allows the model to learn relationships between parameters. "
+            "When a positive link exists, successful values of one parameter will influence suggestions for another. "
+            "Negative links create inverse relationships between parameters."
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        # Current links
+        links_group = QGroupBox("Current Parameter Links")
+        links_layout = QVBoxLayout(links_group)
+        
+        self.links_table = QTableWidget()
+        self.links_table.setColumnCount(3)
+        self.links_table.setHorizontalHeaderLabels(["Parameter", "Influence Type", "Strength"])
+        self.links_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.links_table.setSelectionBehavior(QTableWidget.SelectRows)
+        links_layout.addWidget(self.links_table)
+        
+        # Populate links table
+        self.update_links_table()
+        
+        # Remove link button
+        remove_btn = QPushButton("Remove Selected Link")
+        remove_btn.clicked.connect(self.remove_link)
+        links_layout.addWidget(remove_btn)
+        
+        layout.addWidget(links_group)
+        
+        # Add new link
+        new_link_group = QGroupBox("Add New Parameter Link")
+        new_link_layout = QFormLayout(new_link_group)
+        
+        self.link_param_combo = QComboBox()
+        for name in self.model.parameters.keys():
+            if name != self.param_name:
+                self.link_param_combo.addItem(name)
+                
+        self.link_type_combo = QComboBox()
+        self.link_type_combo.addItems(["Positive", "Negative"])
+        
+        self.link_strength_spin = QDoubleSpinBox()
+        self.link_strength_spin.setRange(0.1, 1.0)
+        self.link_strength_spin.setSingleStep(0.1)
+        self.link_strength_spin.setValue(0.5)
+        self.link_strength_spin.setDecimals(1)
+        
+        new_link_layout.addRow("Linked Parameter:", self.link_param_combo)
+        new_link_layout.addRow("Influence Type:", self.link_type_combo)
+        new_link_layout.addRow("Influence Strength:", self.link_strength_spin)
+        
+        add_btn = QPushButton("Add Link")
+        add_btn.clicked.connect(self.add_link)
+        new_link_layout.addRow("", add_btn)
+        
+        layout.addWidget(new_link_group)
+        
+        # Explanation of influence types
+        explanation_group = QGroupBox("How Parameter Linking Works")
+        explanation_layout = QVBoxLayout(explanation_group)
+        
+        explanation_text = QTextEdit()
+        explanation_text.setReadOnly(True)
+        explanation_text.setPlainText(
+            "Positive Link: When parameter A performs well at high values, parameter B will be suggested with higher values.\n\n"
+            "Negative Link: When parameter A performs well at high values, parameter B will be suggested with lower values.\n\n"
+            "Strength: Controls how much influence the linked parameter has on suggestions (0.1 = weak, 1.0 = strong).\n\n"
+            "Example: If high Temperature (150°C) with DMSO solvent gave good results, a positive link will suggest high "
+            "Temperature when DMSO is selected in future experiments."
+        )
+        explanation_layout.addWidget(explanation_text)
+        
+        layout.addWidget(explanation_group)
+        
+        # Visualization of links
+        vis_group = QGroupBox("Link Visualization")
+        vis_layout = QVBoxLayout(vis_group)
+        
+        self.vis_canvas = MplCanvas(self, width=5, height=3)
+        vis_layout.addWidget(self.vis_canvas)
+        
+        layout.addWidget(vis_group)
+        
+        # Button box
+        button_box = QHBoxLayout()
+        self.ok_button = QPushButton("Close")
+        
+        self.ok_button.clicked.connect(self.accept)
+        
+        button_box.addWidget(self.ok_button)
+        
+        layout.addLayout(button_box)
+        
+        # Draw links visualization
+        self.update_links_visualization()
+        
+    def update_links_table(self):
+        self.links_table.setRowCount(0)
+        
+        if not hasattr(self.param, 'linked_parameters'):
+            return
+            
+        for linked_param, link_info in self.param.linked_parameters.items():
+            row = self.links_table.rowCount()
+            self.links_table.insertRow(row)
+            
+            # Parameter name
+            name_item = QTableWidgetItem(linked_param)
+            self.links_table.setItem(row, 0, name_item)
+            
+            # Influence type
+            type_item = QTableWidgetItem(link_info['type'].capitalize())
+            type_item.setTextAlignment(Qt.AlignCenter)
+            if link_info['type'] == 'positive':
+                type_item.setBackground(QColor(224, 255, 224))
+            else:
+                type_item.setBackground(QColor(255, 224, 224))
+            self.links_table.setItem(row, 1, type_item)
+            
+            # Strength
+            strength_item = QTableWidgetItem(f"{link_info['strength']:.1f}")
+            strength_item.setTextAlignment(Qt.AlignCenter)
+            self.links_table.setItem(row, 2, strength_item)
+            
+    def update_links_visualization(self):
+        self.vis_canvas.axes.clear()
+        
+        if not hasattr(self.param, 'linked_parameters') or not self.param.linked_parameters:
+            self.vis_canvas.axes.text(0.5, 0.5, "No parameter links defined", 
+                ha='center', va='center', transform=self.vis_canvas.axes.transAxes)
+            self.vis_canvas.draw()
+            return
+            
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        # Get all parameters involved in links
+        all_params = set([self.param_name])
+        for linked_param in self.param.linked_parameters.keys():
+            all_params.add(linked_param)
+            
+        # Convert to list for indexing
+        params_list = list(all_params)
+        n_params = len(params_list)
+        
+        # Create adjacency matrix for the link graph
+        matrix = np.zeros((n_params, n_params))
+        colors = []
+        
+        center_idx = params_list.index(self.param_name)
+        
+        for linked_param, link_info in self.param.linked_parameters.items():
+            linked_idx = params_list.index(linked_param)
+            
+            # Set the edge weight
+            influence = link_info['strength']
+            
+            # Set color based on influence type
+            if link_info['type'] == 'positive':
+                color = 'green'
+            else:
+                color = 'red'
+                
+            # Only draw edges from center to linked params
+            matrix[center_idx, linked_idx] = influence
+            colors.append(color)
+            
+        # Create positions for nodes in a circle
+        theta = np.linspace(0, 2 * np.pi, n_params, endpoint=False)
+        pos = {i: (np.cos(t), np.sin(t)) for i, t in enumerate(theta)}
+        
+        # Draw the nodes
+        for i, param in enumerate(params_list):
+            x, y = pos[i]
+            circle = plt.Circle((x, y), 0.1, color='#4285f4' if i == center_idx else '#ea4335')
+            self.vis_canvas.axes.add_patch(circle)
+            self.vis_canvas.axes.text(x, y, param, ha='center', va='center', fontsize=8,
+                             bbox=dict(facecolor='white', alpha=0.7, boxstyle='round,pad=0.2'))
+            
+        # Draw the edges
+        color_idx = 0
+        for i in range(n_params):
+            for j in range(n_params):
+                if matrix[i, j] > 0:
+                    x1, y1 = pos[i]
+                    x2, y2 = pos[j]
+                    
+                    # Calculate arrow points with appropriate scaling
+                    dx = x2 - x1
+                    dy = y2 - y1
+                    dist = np.sqrt(dx*dx + dy*dy)
+                    
+                    # Adjust endpoints to hit circles
+                    dx_norm = dx / dist
+                    dy_norm = dy / dist
+                    
+                    x1_adj = x1 + 0.15 * dx_norm
+                    y1_adj = y1 + 0.15 * dy_norm
+                    x2_adj = x2 - 0.15 * dx_norm
+                    y2_adj = y2 - 0.15 * dy_norm
+                    
+                    # Draw arrow
+                    self.vis_canvas.axes.arrow(x1_adj, y1_adj, x2_adj-x1_adj, y2_adj-y1_adj,
+                                     color=colors[color_idx], width=0.02*matrix[i, j],
+                                     head_width=0.07, head_length=0.1, length_includes_head=True,
+                                     alpha=0.8)
+                    color_idx += 1
+        
+        # Set equal aspect and remove axis
+        self.vis_canvas.axes.set_aspect('equal')
+        self.vis_canvas.axes.axis('off')
+        
+        # Set limits
+        margin = 0.2
+        self.vis_canvas.axes.set_xlim(-1.1 - margin, 1.1 + margin)
+        self.vis_canvas.axes.set_ylim(-1.1 - margin, 1.1 + margin)
+        
+        self.vis_canvas.draw()
+        
+    def add_link(self):
+        linked_param = self.link_param_combo.currentText()
+        if not linked_param or linked_param == self.param_name:
+            return
+            
+        link_type = self.link_type_combo.currentText().lower()
+        link_strength = self.link_strength_spin.value()
+        
+        # Add the link
+        if hasattr(self.param, 'add_linked_parameter'):
+            self.param.add_linked_parameter(linked_param, link_strength, link_type)
+            
+            # Update the UI
+            self.update_links_table()
+            self.update_links_visualization()
+            
+    def remove_link(self):
+        selected_items = self.links_table.selectedItems()
+        if not selected_items:
+            return
+            
+        row = selected_items[0].row()
+        linked_param = self.links_table.item(row, 0).text()
+        
+        # Remove the link
+        if hasattr(self.param, 'remove_linked_parameter'):
+            self.param.remove_linked_parameter(linked_param)
+            
+            # Update the UI
+            self.update_links_table()
+            self.update_links_visualization()

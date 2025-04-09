@@ -13,6 +13,33 @@ class ChemicalParameter:
         self.units = units
         self.prior_mean = None
         self.prior_std = None
+        self.linked_parameters = {}
+        self.initialized_defaults = set()  # Track which default ranges have been applied (as name keys)
+        
+        # Apply default ranges based on parameter name if logical units are enabled
+        if settings.use_logical_units and param_type in ["continuous", "discrete"]:
+            self._apply_logical_unit_defaults()
+        
+    def _apply_logical_unit_defaults(self):
+        """Apply logical unit defaults based on parameter name"""
+        if self.low is not None and self.high is not None and self.low != 0 and self.high != 1:
+            # Skip if ranges are already set to non-default values
+            return
+            
+        rounding_config = settings.get_parameter_rounding(self.name, self.param_type)
+        if rounding_config and "min" in rounding_config and "max" in rounding_config:
+            # Apply defaults from settings
+            if self.low is None or self.low == 0:
+                self.low = rounding_config["min"]
+            if self.high is None or self.high == 1:
+                self.high = rounding_config["max"]
+            
+            # Update units if they're not already set
+            if self.units is None and "unit" in rounding_config:
+                self.units = rounding_config["unit"]
+                
+            # Add parameter name to the initialized set
+            self.initialized_defaults.add(self.name.lower())
         
     def to_optuna_param(self, trial):
         if self.param_type == "continuous":
@@ -32,6 +59,112 @@ class ChemicalParameter:
             self.prior_mean = None
             self.prior_std = None
         
+    def add_linked_parameter(self, param_name, influence_strength=0.5, influence_type="positive"):
+        self.linked_parameters[param_name] = {
+            "strength": float(influence_strength), 
+            "type": influence_type
+        }
+        
+    def remove_linked_parameter(self, param_name):
+        if param_name in self.linked_parameters:
+            del self.linked_parameters[param_name]
+            
+    def get_linked_parameters(self):
+        return self.linked_parameters
+        
+    def adjust_for_linked_parameters(self, param_values, all_parameters):
+        if not self.linked_parameters:
+            return None
+            
+        adjustments = {}
+        
+        if self.param_type == "continuous" or self.param_type == "discrete":
+            adjusted_mean = self.prior_mean if self.prior_mean is not None else (self.low + self.high) / 2
+            adjusted_std = self.prior_std if self.prior_std is not None else (self.high - self.low) / 4
+            total_influence = 0
+            
+            for linked_name, link_info in self.linked_parameters.items():
+                if linked_name in param_values and linked_name in all_parameters:
+                    linked_param = all_parameters[linked_name]
+                    linked_value = param_values[linked_name]
+                    
+                    if linked_param.param_type == "continuous" or linked_param.param_type == "discrete":
+                        norm_value = (linked_value - linked_param.low) / (linked_param.high - linked_param.low)
+                        influence = link_info["strength"]
+                        
+                        if link_info["type"] == "negative":
+                            norm_value = 1.0 - norm_value
+                            
+                        shift = (norm_value - 0.5) * 2 * influence * (self.high - self.low) * 0.2
+                        adjusted_mean += shift
+                        total_influence += abs(influence)
+                        
+                    elif linked_param.param_type == "categorical" and linked_param.choices:
+                        choices_count = len(linked_param.choices)
+                        if choices_count > 1:
+                            choice_index = linked_param.choices.index(linked_value) if linked_value in linked_param.choices else 0
+                            norm_value = choice_index / (choices_count - 1)
+                            
+                            if link_info["type"] == "negative":
+                                norm_value = 1.0 - norm_value
+                                
+                            shift = (norm_value - 0.5) * 2 * link_info["strength"] * (self.high - self.low) * 0.2
+                            adjusted_mean += shift
+                            total_influence += abs(link_info["strength"])
+            
+            if total_influence > 0:
+                adjusted_mean = max(self.low, min(self.high, adjusted_mean))
+                adjustments = {"mean": adjusted_mean, "std": adjusted_std}
+                
+        elif self.param_type == "categorical" and self.choices:
+            preference_weights = {}
+            base_weight = 1.0
+            
+            for choice in self.choices:
+                preference_weights[choice] = base_weight
+                
+            for linked_name, link_info in self.linked_parameters.items():
+                if linked_name in param_values and linked_name in all_parameters:
+                    linked_param = all_parameters[linked_name]
+                    linked_value = param_values[linked_name]
+                    
+                    if linked_param.param_type == "categorical" and linked_param.choices:
+                        for choice in self.choices:
+                            for linked_choice in linked_param.choices:
+                                if linked_value == linked_choice:
+                                    chemical_similarity = self._calculate_chemical_similarity(choice, linked_choice)
+                                    influence = link_info["strength"] * chemical_similarity
+                                    
+                                    if link_info["type"] == "negative":
+                                        influence = -influence
+                                        
+                                    preference_weights[choice] *= (1.0 + influence)
+            
+            adjustments = {"categorical_preferences": preference_weights}
+                
+        return adjustments
+    
+    def _calculate_chemical_similarity(self, compound1, compound2):
+        similar_pairs = [
+            ("DMSO", "Sulfolane"), ("DMSO", "NMP"), ("DMSO", "DMF"),
+            ("THF", "Dioxane"), ("THF", "MTBE"), ("THF", "2-MeTHF"),
+            ("MeOH", "EtOH"), ("MeOH", "i-PrOH"), ("EtOH", "i-PrOH"),
+            ("Water", "MeOH"), ("Water", "EtOH"),
+            ("DCM", "Chloroform"), ("DCM", "DCE"),
+            ("Toluene", "Benzene"), ("Toluene", "Xylene"),
+            ("Hexane", "Pentane"), ("Hexane", "Heptane"),
+            ("Acetone", "Acetonitrile"), ("Acetone", "MEK")
+        ]
+        
+        if compound1 == compound2:
+            return 1.0
+            
+        for pair in similar_pairs:
+            if (compound1 in pair and compound2 in pair):
+                return 0.7
+                
+        return 0.1
+        
     def suggest_value(self):
         """Generate a parameter value based on parameter type and prior knowledge.
         
@@ -40,7 +173,17 @@ class ChemicalParameter:
             otherwise using parameter ranges or choices.
         """
         if self.param_type == "continuous" or self.param_type == "discrete":
-            return self.suggest_numeric_value()
+            value = self.suggest_numeric_value()
+            
+            # Apply logical unit rounding if enabled
+            if settings.use_logical_units and value is not None:
+                rounding_config = settings.get_parameter_rounding(self.name, self.param_type)
+                if rounding_config and "interval" in rounding_config:
+                    value = settings.round_to_interval(value, rounding_config["interval"])
+                    # Ensure value stays within bounds after rounding
+                    value = max(self.low, min(self.high, value))
+            
+            return value
         elif self.param_type == "categorical":
             return self.suggest_categorical_value()
         return None
