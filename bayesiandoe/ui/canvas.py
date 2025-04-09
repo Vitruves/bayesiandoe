@@ -28,9 +28,10 @@ class Mpl3DCanvas(FigureCanvasQTAgg):
         super().__init__(self.fig)
         self.setParent(parent)
         
+        # Use manual adjustment instead of tight_layout for 3D plots
         self.fig.subplots_adjust(left=0.1, right=0.9, top=0.9, bottom=0.1)
         
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.fig.tight_layout(pad=2.0)
+        # Don't use tight_layout for 3D plots - causes warning
         self.draw_idle()

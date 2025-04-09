@@ -548,97 +548,191 @@ def generate_initial_experiments(self):
         self.log(f"-- Failed to generate experiments: {str(e)} - Error")
 
 def generate_next_experiments(self):
+    if not self.model.experiments:
+        QMessageBox.warning(self, "Warning", "No experiment results yet.")
+        return
+        
+    n_next = self.n_next_spin.value()
+    exploitation_weight = self.exploit_slider.value() / 100.0
+    
     try:
-        # Get number of experiments to generate
-        n_experiments = self.n_next_spin.value()
+        # Clear any lingering cache that could cause issues
+        if hasattr(self.model, 'clear_surrogate_cache'):
+            self.model.clear_surrogate_cache()
         
-        if not self.model.parameters:
-            self.log("-- No parameters defined. Add parameters first - Error")
-            return
-            
-        if not self.model.objectives:
-            self.log("-- No objectives defined. Define objectives first - Error")
-            return
-            
-        if not self.model.experiments:
-            self.log("-- No experiment results yet. Enter results first - Error")
-            return
-            
-        # Generate suggestions
-        suggestions = self.model.suggest_experiments(n_experiments)
+        # Save old weight in case we need to restore it
+        old_weight = self.model.exploitation_weight
+        self.model.exploitation_weight = exploitation_weight
         
+        # Generate next experiments
+        suggestions = self.model.suggest_experiments(n_suggestions=n_next)
+        
+        if not suggestions:
+            raise ValueError("No valid suggestions generated")
+            
         # Add to planned experiments
-        if not hasattr(self.model, 'planned_experiments'):
-            self.model.planned_experiments = []
+        if not hasattr(self, 'round_start_indices'):
+            self.round_start_indices = []
             
-        # Store the start index for this round
         self.round_start_indices.append(len(self.model.planned_experiments))
         
-        # Add new experiments
+        # Debug output before adding to planned experiments
+        print(f"Before adding: {len(self.model.planned_experiments)} planned experiments")
+        print(f"Adding {len(suggestions)} new suggestions")
+        
+        # Add the suggestions
         self.model.planned_experiments.extend(suggestions)
+        
+        # Debug output after adding
+        print(f"After adding: {len(self.model.planned_experiments)} planned experiments")
+        print(f"Round start indices: {self.round_start_indices}")
+        
+        # Update round counter and UI
         self.current_round += 1
+        self.current_round_label.setText(str(self.current_round))
         
-        # Update the UI
-        update_ui_from_model(self)
+        # Make sure experiment table columns match parameter structure
+        self.experiment_table.update_columns(self.model)
         
-        self.log(f"-- Generated {n_experiments} next experiments - Success")
+        # Update experiment table display with new experiments
+        self.experiment_table.update_from_planned(self.model, self.round_start_indices)
+        
+        # Debug table state
+        if hasattr(self.experiment_table, 'debug_table_state'):
+            self.experiment_table.debug_table_state()
+        
+        # Verify data made it to the table by checking row count
+        expected_rows = len(self.model.planned_experiments) + len(self.round_start_indices)
+        if self.experiment_table.rowCount() < expected_rows * 0.8:  # Allow some margin for error
+            print(f"WARNING: Table has fewer rows ({self.experiment_table.rowCount()}) than expected ({expected_rows})")
+            # Force layout update
+            self.experiment_table.resizeColumnsToContents()
+            self.experiment_table.resizeRowsToContents()
+            self.experiment_table.update()
+        
+        # Log success
+        self.log(f"-- Generated {n_next} experiments for round {self.current_round} - Success")
         
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
         self.log(f"-- Failed to generate experiments: {str(e)} - Error")
+        print(f"Error details: {error_details}")
+        
+        # Restore old exploitation weight
+        self.model.exploitation_weight = old_weight
 
 def add_result_for_selected(self):
-    selected_items = self.experiment_table.selectedItems()
-    if not selected_items:
-        self.log("-- Please select an experiment from the table first - Error")
-        return
-        
-    row = selected_items[0].row()
-    id_item = None
-    
-    # Skip header rows
-    for col in range(self.experiment_table.columnCount()):
-        item = self.experiment_table.item(row, col)
-        if item and col == 1:  # ID column
-            id_item = item
-            break
-    
-    if not id_item or not id_item.text() or "Round" in id_item.text():
-        self.log("-- Invalid experiment selection. Please select a valid experiment row - Error")
-        return
-        
+    """Add result for selected experiment with enhanced error detection and reporting."""
     try:
-        exp_id = int(id_item.text()) - 1
-    except ValueError:
-        self.log("-- Invalid experiment ID. Please select a valid experiment row - Error")
-        return
+        # Print debug info about table
+        print(f"Experiment table has {self.experiment_table.rowCount()} rows")
         
-    if exp_id < 0 or exp_id >= len(self.model.planned_experiments):
-        self.log("-- Invalid experiment ID - Error")
-        return
-    
-    # Check if this experiment already has results
-    for i, exp in enumerate(self.model.experiments):
-        if "params" in exp and all(exp["params"].get(k) == self.model.planned_experiments[exp_id].get(k) 
-                                  for k in self.model.parameters.keys()):
-            self.log(f"-- Experiment #{exp_id+1} already has results - Error")
+        selected_items = self.experiment_table.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "Warning", "Please select an experiment row first.")
             return
-    
-    params = self.model.planned_experiments[exp_id]
-    
-    dialog = ResultDialog(self, self.model, exp_id, params)
-    if dialog.exec() == QDialog.Accepted and dialog.result:
-        self.model.add_experiment_result(dialog.result["params"], dialog.result["results"])
+            
+        # Get the row number of the first selected item
+        row = selected_items[0].row()
+        print(f"Selected row: {row}")
         
-        # Update the UI
-        update_ui_from_model(self)
-        update_best_result_label(self)
+        # Check if this is a separator row by checking column span
+        if self.experiment_table.columnSpan(row, 0) > 1:
+            QMessageBox.warning(self, "Warning", "You selected a round separator. Please select an experiment row.")
+            return
+            
+        # Make sure we have both row and ID columns populated
+        round_item = self.experiment_table.item(row, 0)
+        id_item = self.experiment_table.item(row, 1)
         
-        # If we're currently on the Results tab, update the plots
-        if self.tab_widget.currentIndex() == 3:
-            update_results_plot(self)
-            update_best_results(self)
+        if not round_item or not id_item:
+            QMessageBox.warning(self, "Warning", "Selected row is missing critical data.")
+            return
+            
+        print(f"Round: {round_item.text() if round_item else 'None'}, ID: {id_item.text() if id_item else 'None'}")
         
-        log(self, f"-- Added result for experiment #{exp_id+1} - Success")
+        if not id_item or not id_item.text().isdigit():
+            QMessageBox.warning(self, "Warning", "Selected row doesn't have a valid experiment ID.")
+            return
+            
+        exp_id = int(id_item.text()) - 1
+        print(f"Experiment ID: {exp_id+1}")
+        
+        # Make sure experiment exists in planned experiments
+        if exp_id < 0 or exp_id >= len(self.model.planned_experiments):
+            QMessageBox.warning(self, "Warning", f"Experiment #{exp_id+1} doesn't exist in planned experiments.")
+            return
+            
+        # Get parameters for this experiment
+        exp_params = self.model.planned_experiments[exp_id]
+        print(f"Experiment parameters: {exp_params}")
+            
+        # Check if result already exists
+        existing_exp = None
+        for i, exp in enumerate(self.model.experiments):
+            if 'params' not in exp:
+                continue
+                
+            # Count matching parameters
+            matching_params = 0
+            total_params = 0
+            for k, v in exp_params.items():
+                if k in exp['params']:
+                    total_params += 1
+                    if isinstance(v, float):
+                        # For floats, allow small differences
+                        if abs(float(exp['params'][k]) - float(v)) < 1e-6:
+                            matching_params += 1
+                    elif exp['params'][k] == v:
+                        matching_params += 1
+            
+            # If all parameters match, consider it the same experiment
+            if matching_params == total_params and total_params > 0:
+                existing_exp = exp
+                print(f"Found existing result (experiment #{i+1})")
+                break
+        
+        if existing_exp:
+            confirm = QMessageBox.question(self, "Confirm", 
+                                f"Result already exists for experiment #{exp_id+1}. Replace it?",
+                                QMessageBox.Yes | QMessageBox.No)
+            if confirm == QMessageBox.No:
+                return
+                
+            # Remove existing result
+            self.model.experiments.remove(existing_exp)
+            print("Removed existing result")
+            
+        # Show dialog to input results
+        dialog = ResultDialog(self, self.model, exp_id, exp_params)
+        if dialog.exec() == QDialog.Accepted and dialog.result:
+            # Add result to model
+            self.model.experiments.append(dialog.result)
+            print(f"Added new result: {dialog.result}")
+            
+            # Calculate score
+            results = dialog.result['results']
+            score = self.model._calculate_composite_score(results)
+            dialog.result['score'] = score
+            print(f"Calculated score: {score}")
+            
+            # Update table
+            print("Updating experiment table")
+            self.experiment_table.update_from_planned(self.model, self.round_start_indices)
+            
+            # Update best results
+            if hasattr(self, 'best_table'):
+                print("Updating best results table")
+                self.best_table.update_from_model(self.model, self.n_best_spin.value())
+                
+            # Update log
+            self.log(f"-- Added result for experiment #{exp_id+1} - Success")
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        self.log(f"-- Failed to add result: {str(e)} - Error")
+        print(f"Error details: {error_details}")
 
 def new_project(self):
     confirm = QMessageBox.question(
@@ -655,6 +749,11 @@ def new_project(self):
         self.round_start_indices = []
         self.working_directory = os.getcwd()
         
+        # Explicitly update columns on tables first
+        self.experiment_table.update_columns(self.model)
+        if hasattr(self, 'best_table'):
+            self.best_table.update_columns(self.model)
+            
         update_ui_from_model(self)
         self.tab_widget.setCurrentIndex(0)
         log(self, "-- New project created - Success")

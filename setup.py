@@ -39,6 +39,10 @@ setup(
         "tqdm",
         "typing-extensions",
         "tzdata",
+        "botorch",
+        "gpytorch",
+        "torch",
+        "gpyopt",
         "zipp",
     ],
     entry_points={

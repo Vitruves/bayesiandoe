@@ -359,7 +359,7 @@ class PriorDialog(QDialog):
         self.param = model.parameters[param_name]
         
         self.setWindowTitle(f"Set Prior for {param_name}")
-        self.resize(450, 350)
+        self.resize(650, 550)
         self.setup_ui()
         
     def setup_ui(self):

@@ -204,3 +204,35 @@ class BayesianDOEApp(QMainWindow):
             if self.model.experiments:
                 if hasattr(self, 'convergence_canvas'):
                     update_convergence_plot(self)
+
+    def handle_critical_error(self, error_msg, details=None):
+        """Handle critical errors with proper user feedback."""
+        from PySide6.QtWidgets import QMessageBox
+        
+        # Log the error
+        self.log(f"-- ERROR: {error_msg} - Failed")
+        
+        # Show error dialog with details
+        error_box = QMessageBox(self)
+        error_box.setIcon(QMessageBox.Critical)
+        error_box.setWindowTitle("Error")
+        error_box.setText(error_msg)
+        
+        if details:
+            error_box.setDetailedText(details)
+        
+        # Add helpful action buttons
+        retry_button = error_box.addButton("Retry", QMessageBox.ActionRole)
+        continue_button = error_box.addButton("Continue Anyway", QMessageBox.ActionRole)
+        cancel_button = error_box.addButton("Cancel", QMessageBox.RejectRole)
+        
+        error_box.exec_()
+        
+        # Handle user choice
+        clicked = error_box.clickedButton()
+        if clicked == retry_button:
+            return "retry"
+        elif clicked == continue_button:
+            return "continue"
+        else:
+            return "cancel"

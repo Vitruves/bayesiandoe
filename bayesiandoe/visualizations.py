@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from scipy import stats
 import pandas as pd
 from .core import _calculate_parameter_distance
+from sklearn.gaussian_process import GaussianProcessRegressor
 
 def plot_optimization_history(model, ax=None):
     if ax is None:
@@ -215,7 +216,7 @@ def plot_objective_correlation(model, ax=None):
     ax.set_title("Objective Correlation Matrix")
     return ax
 
-def plot_response_surface(model, obj, x_param, y_param, ax=None):
+def plot_response_surface(model, x_param, y_param, obj, gp_model=None, ax=None):
     if ax is None:
         fig = plt.figure(figsize=(10, 8))
         ax = fig.add_subplot(111, projection='3d')
@@ -259,27 +260,98 @@ def plot_response_surface(model, obj, x_param, y_param, ax=None):
             
         from scipy.interpolate import griddata
         
-        x_min, x_max = min(x_data), max(x_data)
-        y_min, y_max = min(y_data), max(y_data)
+        x_min_data, x_max_data = min(x_data), max(x_data)
+        y_min_data, y_max_data = min(y_data), max(y_data)
         
-        x_range = x_max - x_min
-        y_range = y_max - y_min
-        x_min -= x_range * 0.1
-        x_max += x_range * 0.1
-        y_min -= y_range * 0.1
-        y_max += y_range * 0.1
+        x_range = x_max_data - x_min_data if x_max_data > x_min_data else 1.0
+        y_range = y_max_data - y_min_data if y_max_data > y_min_data else 1.0
         
-        xi = np.linspace(x_min, x_max, 50)
-        yi = np.linspace(y_min, y_max, 50)
-        xi, yi = np.meshgrid(xi, yi)
-        
-        zi = griddata((x_data, y_data), z_data, (xi, yi), method='cubic')
-        
-        zi = np.clip(zi, 0, 100)
+        x_grid_min = x_min_data - x_range * 0.1
+        x_grid_max = x_max_data + x_range * 0.1
+        y_grid_min = y_min_data - y_range * 0.1
+        y_grid_max = y_max_data + y_range * 0.1
+
+        n_grid = 50
+        xi = np.linspace(x_grid_min, x_grid_max, n_grid)
+        yi = np.linspace(y_grid_min, y_grid_max, n_grid)
+        xi_mesh, yi_mesh = np.meshgrid(xi, yi)
+
+        if gp_model:
+            # Use GP model for prediction if provided
+            grid_points = np.vstack([xi_mesh.ravel(), yi_mesh.ravel()]).T
+            
+            # Need to construct full feature vectors for prediction
+            # Assume other parameters are fixed at their median or mode
+            fixed_params = {}
+            param_order = list(model.parameters.keys())
+            x_param_idx = param_order.index(x_param)
+            y_param_idx = param_order.index(y_param)
+
+            full_features_template = []
+            norm_x_data = []
+            
+            for p_name, p_obj in model.parameters.items():
+                 if p_name == x_param or p_name == y_param:
+                     continue # Placeholder
+                 
+                 vals = [exp['params'][p_name] for exp in model.experiments if p_name in exp['params']]
+                 if not vals:
+                     # Use default if no data
+                     fixed_val = p_obj.low + (p_obj.high - p_obj.low) / 2 if p_obj.param_type != "categorical" else p_obj.choices[0]
+                 elif p_obj.param_type == "categorical":
+                      from collections import Counter
+                      fixed_val = Counter(vals).most_common(1)[0][0]
+                 else:
+                     fixed_val = np.median(vals)
+
+                 fixed_params[p_name] = fixed_val
+                 
+                 # Normalize fixed param values
+                 if p_obj.param_type in ["continuous", "discrete"]:
+                      norm_val = (fixed_val - p_obj.low) / (p_obj.high - p_obj.low) if p_obj.high > p_obj.low else 0.5
+                      full_features_template.append(norm_val)
+                 elif p_obj.param_type == "categorical":
+                      for choice in p_obj.choices:
+                         full_features_template.append(1.0 if fixed_val == choice else 0.0)
+
+            # Prepare grid features for prediction
+            X_pred = []
+            feature_len = len(model._normalize_params(model.experiments[0]['params'])) # Get expected feature length
+            
+            for gx, gy in zip(xi_mesh.ravel(), yi_mesh.ravel()):
+                current_params = fixed_params.copy()
+                current_params[x_param] = gx
+                current_params[y_param] = gy
+                normalized_features = model._normalize_params(current_params)
+                
+                # Ensure feature vector length matches training data
+                if len(normalized_features) == feature_len:
+                    X_pred.append(normalized_features)
+                else:
+                    # Handle potential length mismatch (e.g., due to categorical encoding issues)
+                    print(f"Warning: Feature length mismatch in surface plot. Expected {feature_len}, got {len(normalized_features)}")
+                    # Append a zero vector or handle appropriately
+                    X_pred.append([0.0] * feature_len) 
+            
+            X_pred = np.array(X_pred)
+            
+            if X_pred.shape[0] > 0:
+                 zi, std_zi = gp_model.predict(X_pred, return_std=True)
+                 zi = zi.reshape(xi_mesh.shape)
+                 zi = np.clip(zi, 0, 100) # Clip predictions to valid range
+            else:
+                 # Fallback if feature preparation failed
+                 print("Warning: Could not prepare features for GP prediction in surface plot. Falling back.")
+                 zi = griddata((x_data, y_data), z_data, (xi_mesh, yi_mesh), method='cubic', fill_value=np.mean(z_data))
+
+        else:
+             # Fallback to griddata if no GP model
+            zi = griddata((x_data, y_data), z_data, (xi_mesh, yi_mesh), method='cubic', fill_value=np.mean(z_data))
+            zi = np.clip(zi, 0, 100)
         
         ax.set_facecolor('#f5f5f5')
         
-        surf = ax.plot_surface(xi, yi, zi, cmap='viridis', 
+        surf = ax.plot_surface(xi_mesh, yi_mesh, zi, cmap='viridis', 
                              alpha=0.8, antialiased=True,
                              rstride=1, cstride=1)
                          
@@ -357,6 +429,13 @@ def plot_convergence(model, ax=None):
     for exp in model.experiments:
         score = 0
         weight_sum = 0
+        # Use the composite score directly if available and calculated
+        if 'score' in exp and exp['score'] is not None:
+             score = exp['score']
+             scores.append(score * 100.0)
+             continue # Skip recalculation if already present
+             
+        # Fallback: recalculate if 'score' is missing
         for obj in model.objectives:
             if obj in exp.get('results', {}) and exp['results'][obj] is not None:
                 weight = model.objective_weights.get(obj, 1.0)
@@ -459,11 +538,21 @@ def plot_convergence(model, ax=None):
         final_value = best_scores[-1]
         growth_rate = 0.1  # Initial guess
         
-        p0 = [final_value - init_value, growth_rate, init_value]
+        # Ensure bounds are valid for curve_fit
+        lower_bound = [0, 1e-6, 0]
+        upper_bound = [100.0, 1.0, 100.0] # Assume max score is 100%
+        
+        # Make sure initial guess p0 is within bounds
+        p0 = [
+            max(lower_bound[0], min(upper_bound[0], final_value - init_value)), 
+            max(lower_bound[1], min(upper_bound[1], growth_rate)), 
+            max(lower_bound[2], min(upper_bound[2], init_value))
+        ]
         
         # Fit the convergence model to the data
         try:
-            popt, pcov = curve_fit(convergence_model, x, best_scores, p0=p0, maxfev=10000)
+            popt, pcov = curve_fit(convergence_model, x, best_scores, p0=p0, 
+                                   bounds=(lower_bound, upper_bound), maxfev=10000)
             a, b, c = popt
             
             # Compute projected future values

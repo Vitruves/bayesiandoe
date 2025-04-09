@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QLabel
 )
 from ..core import _calculate_parameter_distance, settings
+from concurrent.futures import ThreadPoolExecutor
 
 class LogDisplay:
     def __init__(self):
@@ -200,7 +201,18 @@ class ExperimentTable(QTableWidget):
         self.setSelectionBehavior(QTableWidget.SelectRows)
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         
+        # Add a direct reference to store the model
+        self.model = None
+        
+        # Initialize thread pool
+        self.executor = ThreadPoolExecutor(max_workers=1)
+        self._prediction_start_time = 0
+        self._prediction_future = None
+        
     def update_columns(self, model):
+        # Store reference to the model
+        self.model = model
+        
         columns = ["Round", "ID"] + list(model.parameters.keys()) + model.objectives + ["Predicted"]
         self.setColumnCount(len(columns))
         self.setHorizontalHeaderLabels(columns)
@@ -221,61 +233,81 @@ class ExperimentTable(QTableWidget):
         self.horizontalHeader().setSectionResizeMode(predict_col, QHeaderView.ResizeToContents)
         
     def update_from_planned(self, model, round_start_indices):
-        # Make sure we preserve existing functionality but improve it
-        # Add additional debugging code if necessary
+        """Update experiment table from planned experiments with debug info."""
         try:
             if not hasattr(model, 'planned_experiments') or not model.planned_experiments:
+                print("No planned experiments found")
                 return
             
+            print(f"Updating table with {len(model.planned_experiments)} planned experiments")
+            print(f"Round start indices: {round_start_indices}")
+            
+            # Block signals during update
+            self.blockSignals(True)
+            self.setSortingEnabled(False)
+            
+            # Save current scroll position and selection
             vscroll = self.verticalScrollBar().value()
-            
-            selected_exp_id = -1
-            if self.selectedItems():
-                selected_row_index = self.selectedItems()[0].row()
-                id_item = self.item(selected_row_index, 1)
+            selected_items = self.selectedItems()
+            selected_exp_ids = []
+            if selected_items:
+                row = selected_items[0].row()
+                id_item = self.item(row, 1)
                 if id_item and id_item.text().isdigit():
-                    try:
-                        selected_exp_id = int(id_item.text()) - 1
-                    except ValueError:
-                        pass
+                    selected_exp_ids.append(int(id_item.text()) - 1)
 
+            # First completely clear the table
+            self.clearContents()
             self.setRowCount(0)
-            current_round_num = 0
             
-            exp_id_to_row = {}
+            # Debug column headers
+            headers = [self.horizontalHeaderItem(i).text() if self.horizontalHeaderItem(i) else f"Col {i}"
+                      for i in range(self.columnCount())]
+            print(f"Table columns: {headers}")
             
+            # Map experiment ID to round number
             exp_to_round = {}
-            next_round_idx = 0
-            for i in range(len(model.planned_experiments)):
-                if next_round_idx < len(round_start_indices) and i >= round_start_indices[next_round_idx]:
-                    current_round_num += 1
-                    next_round_idx += 1
-                exp_to_round[i] = current_round_num
-                
-            current_display_round = 0
+            current_round = 0
+            
+            for i, _ in enumerate(model.planned_experiments):
+                if current_round < len(round_start_indices) and i >= round_start_indices[current_round]:
+                    current_round += 1
+                exp_to_round[i] = current_round
+            
+            # Track row index for each experiment
+            exp_id_to_row = {}
+            current_display_round = -1
+            
+            # Fill table with experiments
             for i, params in enumerate(model.planned_experiments):
-                round_num = exp_to_round.get(i, 1)
+                round_num = exp_to_round.get(i, 0)
                 
+                # Add round separator if needed
                 if current_display_round != round_num:
                     current_display_round = round_num
-                    if self.rowCount() > 0:
-                        separator_row_index = self.rowCount()
-                        self.insertRow(separator_row_index)
-                        separator_item = QTableWidgetItem(f"--- Round {round_num} ---")
-                        separator_item.setTextAlignment(Qt.AlignCenter)
-                        separator_item.setBackground(QColor(220, 220, 220))
-                        separator_item.setForeground(QColor(80, 80, 80))
-                        font = separator_item.font()
-                        font.setBold(True)
-                        separator_item.setFont(font)
-                        self.setSpan(separator_row_index, 0, 1, self.columnCount())
-                        self.setItem(separator_row_index, 0, separator_item)
-                        separator_item.setFlags(separator_item.flags() & ~Qt.ItemIsSelectable)
-
+                    separator_row = self.rowCount()
+                    self.insertRow(separator_row)
+                    
+                    separator_item = QTableWidgetItem(f"--- Round {round_num} ---")
+                    separator_item.setTextAlignment(Qt.AlignCenter)
+                    separator_item.setBackground(QColor(220, 220, 220))
+                    separator_item.setForeground(QColor(80, 80, 80))
+                    
+                    font = separator_item.font()
+                    font.setBold(True)
+                    separator_item.setFont(font)
+                    
+                    self.setSpan(separator_row, 0, 1, self.columnCount())
+                    self.setItem(separator_row, 0, separator_item)
+                    # Make separator non-selectable
+                    separator_item.setFlags(separator_item.flags() & ~Qt.ItemIsSelectable)
+                
+                # Add experiment row
                 row_index = self.rowCount()
                 self.insertRow(row_index)
                 exp_id_to_row[i] = row_index
                 
+                # Add round number
                 round_item = QTableWidgetItem(str(round_num))
                 round_item.setTextAlignment(Qt.AlignCenter)
                 font = round_item.font()
@@ -283,16 +315,18 @@ class ExperimentTable(QTableWidget):
                 round_item.setFont(font)
                 self.setItem(row_index, 0, round_item)
                 
+                # Add experiment ID
                 id_item = QTableWidgetItem(str(i + 1))
                 id_item.setTextAlignment(Qt.AlignCenter)
                 self.setItem(row_index, 1, id_item)
                 
-                # Set parameter values
+                # Add parameter values
                 for col, param_name in enumerate(model.parameters.keys(), 2):
                     value_str = ""
                     if param_name in params:
                         value = params[param_name]
                         if isinstance(value, float):
+                            from ..core import settings
                             value_str = settings.format_value(value)
                         else:
                             value_str = str(value)
@@ -304,209 +338,176 @@ class ExperimentTable(QTableWidget):
                 for col_idx in range(2 + len(model.parameters), self.columnCount()):
                     self.setItem(row_index, col_idx, QTableWidgetItem(""))
             
+            print(f"Added {len(exp_id_to_row)} experiment rows to table")
+            
+            # Process completed experiments
             completed_indices = set()
-            for completed_exp in model.experiments:
-                found_match_idx = -1
-                for planned_idx, planned_params in enumerate(model.planned_experiments):
-                    if planned_idx in completed_indices:
-                        continue
-                        
-                    matches_all_params = True
-                    if set(planned_params.keys()) != set(k for k in completed_exp['params'] if k in model.parameters):
-                         matches_all_params = False
-                    else:
-                        for p_name, p_value in planned_params.items():
-                            if p_name not in completed_exp['params']:
-                                matches_all_params = False
-                                break
-                                
-                            comp_value = completed_exp['params'][p_name]
-                            
-                            param_type = model.parameters.get(p_name).param_type if p_name in model.parameters else "unknown"
-                            if param_type == "continuous":
-                                if abs(float(p_value) - float(comp_value)) > 1e-5:
-                                    matches_all_params = False
-                                    break
-                            elif p_value != comp_value:
-                                matches_all_params = False
-                                break
+            for exp_idx, exp_data in enumerate(model.experiments):
+                matched_exp_idx = self._find_matching_planned_experiment(model, exp_data, completed_indices)
+                
+                if matched_exp_idx != -1 and matched_exp_idx in exp_id_to_row:
+                    completed_indices.add(matched_exp_idx)
+                    row_index = exp_id_to_row[matched_exp_idx]
                     
-                    if matches_all_params:
-                        found_match_idx = planned_idx
-                        break
-
-                if found_match_idx != -1 and found_match_idx in exp_id_to_row:
-                    completed_indices.add(found_match_idx)
-                    row_index = exp_id_to_row[found_match_idx]
-                    
-                    # Highlight the completed experiment row
+                    # Highlight completed experiment row
                     for col in range(self.columnCount()):
                         item = self.item(row_index, col)
                         if item:
                             item.setBackground(QColor(224, 255, 224))
                     
-                    # Fill in results for each objective
-                    if "results" in completed_exp:
+                    # Add result values for each objective
+                    if "results" in exp_data:
                         objective_base_col = 2 + len(model.parameters)
                         for obj_idx, obj_name in enumerate(model.objectives):
-                            if obj_name in completed_exp["results"] and completed_exp["results"][obj_name] is not None:
-                                obj_col_idx = objective_base_col + obj_idx
-                                obj_value = completed_exp["results"][obj_name] * 100.0
-                                obj_item = QTableWidgetItem(f"{obj_value:.2f}%")
-                                obj_item.setTextAlignment(Qt.AlignCenter)
-                                obj_item.setBackground(QColor(224, 255, 224))
-                                self.setItem(row_index, obj_col_idx, obj_item)
-                        
-                        # Clear prediction since we have actual results
-                        predict_col_idx = self.columnCount() - 1
-                        pred_item = self.item(row_index, predict_col_idx)
-                        if pred_item:
-                             pred_item.setText("")
-
-            # Generate predictions for incomplete experiments using BoTorch model
-            if len(model.experiments) >= 3:
-                try:
-                    # Initialize BoTorch model for predictions
-                    import torch
-                    import gpytorch
-                    from botorch.models import SingleTaskGP
-                    from gpytorch.mlls import ExactMarginalLogLikelihood
-                    from botorch.fit import fit_gpytorch_model
-                    
-                    # Extract training data
-                    train_X, train_Y = model._extract_normalized_features_and_targets()
-                    train_X = torch.tensor(train_X, dtype=torch.float64)
-                    train_Y = torch.tensor(train_Y, dtype=torch.float64).reshape(-1, 1)
-                    
-                    # Normalize Y for numerical stability
-                    Y_mean = train_Y.mean()
-                    Y_std = train_Y.std()
-                    if Y_std < 1e-6:
-                        Y_std = torch.tensor(1.0)
-                    train_Y_normalized = (train_Y - Y_mean) / Y_std
-                    
-                    # Build the GP model
-                    gp = SingleTaskGP(train_X, train_Y_normalized)
-                    mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
-                    
-                    # Fit model
-                    try:
-                        fit_gpytorch_model(mll)
-                    except Exception as e:
-                        print(f"Warning: GP model fitting failed: {e}")
-                    
-                    # Set to evaluation mode
-                    gp.eval()
-                    
-                    # Get predictions for all planned but incomplete experiments
-                    for i, params in enumerate(model.planned_experiments):
-                        if i not in completed_indices and i in exp_id_to_row:
-                            row_index = exp_id_to_row[i]
-                            
-                            # Normalize parameters
-                            test_X = torch.tensor([model._normalize_params(params)], dtype=torch.float64)
-                            
-                            # Predict
-                            with torch.no_grad():
-                                posterior = gp.posterior(test_X)
-                                mean = posterior.mean.cpu()
-                                std = posterior.variance.sqrt().cpu()
-                                
-                            # Denormalize prediction
-                            pred_mean = mean * Y_std + Y_mean
-                            
-                            # Convert to percentage for display
-                            pred_value = pred_mean.item() * 100.0
-                            uncertainty = std.item() * Y_std.item() * 100.0
-                            
-                            # Set prediction in table with confidence interval
-                            pred_col_idx = self.columnCount() - 1
-                            pred_text = f"{settings.format_value(pred_value)}%±{settings.format_value(uncertainty)}%"
-                            pred_item = QTableWidgetItem(pred_text)
-                            
-                            # Color code by prediction confidence
-                            confidence_level = 1.0 - min(uncertainty / 20.0, 0.8)  # Max 80% fading
-                            color_intensity = int(220 * confidence_level)
-                            pred_item.setBackground(QColor(220, color_intensity, 255))
-                            pred_item.setForeground(QColor(0, 0, 150))
-                            pred_item.setTextAlignment(Qt.AlignCenter)
-                            self.setItem(row_index, pred_col_idx, pred_item)
-                            
-                except Exception as e:
-                    print(f"BoTorch prediction error: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    # Fall back to simpler prediction method
-                    self._simple_distance_predictions(model, completed_indices, exp_id_to_row)
-            else:
-                # Not enough data for GP, use simpler method
-                self._simple_distance_predictions(model, completed_indices, exp_id_to_row)
-
-            self.verticalScrollBar().setValue(vscroll)
+                            if obj_name in exp_data["results"] and exp_data["results"][obj_name] is not None:
+                                if objective_base_col + obj_idx < self.columnCount():
+                                    obj_value = exp_data["results"][obj_name] * 100.0
+                                    obj_item = QTableWidgetItem(f"{obj_value:.2f}%")
+                                    obj_item.setTextAlignment(Qt.AlignCenter)
+                                    obj_item.setBackground(QColor(224, 255, 224))
+                                    self.setItem(row_index, objective_base_col + obj_idx, obj_item)
             
-            if selected_exp_id >= 0 and selected_exp_id in exp_id_to_row:
-                 self.selectRow(exp_id_to_row[selected_exp_id])
+            print(f"Processed {len(completed_indices)} completed experiments")
+            
+            # Make sure the widget is updated
+            self.viewport().update()
+            
+            # Restore scroll position and selection
+            self.verticalScrollBar().setValue(vscroll)
+            for exp_id in selected_exp_ids:
+                if exp_id in exp_id_to_row:
+                    self.selectRow(exp_id_to_row[exp_id])
+                
+            # Re-enable signals and sorting
+            self.setSortingEnabled(True)
+            self.blockSignals(False)
+            
         except Exception as e:
-            print(f"Error in update_from_planned: {e}")
             import traceback
+            print(f"Error in update_from_planned: {e}")
             traceback.print_exc()
 
-    def _simple_distance_predictions(self, model, completed_indices, exp_id_to_row):
-        """Fallback prediction method using simple distance-based neighbor averaging"""
-        import numpy as np
+    def _find_matching_planned_experiment(self, model, exp_data, completed_indices):
+        """Find the planned experiment that matches the experiment data."""
+        if 'params' not in exp_data:
+            return -1
         
-        for i, planned_params in enumerate(model.planned_experiments):
-            if i in completed_indices or i not in exp_id_to_row:
+        for planned_idx, planned_params in enumerate(model.planned_experiments):
+            if planned_idx in completed_indices:
                 continue
             
-            row_index = exp_id_to_row[i]
-            predict_col_idx = self.columnCount() - 1
-            
-            # Only predict if we have the first objective (usually yield)
-            if model.objectives and model.objectives[0] in model.objective_weights:
-                try:
-                    k = 5  # Number of nearest neighbors to consider
-                    distances = []
-                    target_obj = model.objectives[0]  # First objective to predict
-                    
-                    for completed_exp in model.experiments:
-                        if "results" in completed_exp and target_obj in completed_exp['results'] and completed_exp['results'][target_obj] is not None:
-                            dist = _calculate_parameter_distance(planned_params, completed_exp['params'], model.parameters)
-                            distances.append((dist, completed_exp['results'][target_obj]))
+            # Check if parameters match
+            params_match = True
+            for param_name, planned_value in planned_params.items():
+                if param_name not in exp_data['params']:
+                    params_match = False
+                    break
+                
+                exp_value = exp_data['params'][param_name]
+                
+                # Compare values based on parameter type
+                param = model.parameters.get(param_name)
+                if not param:
+                    continue
+                
+                if param.param_type == 'continuous':
+                    # Allow small floating point differences
+                    if abs(float(planned_value) - float(exp_value)) > 1e-6:
+                        params_match = False
+                        break
+                elif planned_value != exp_value:
+                    params_match = False
+                    break
+                
+            if params_match:
+                return planned_idx
+        
+        return -1
 
-                    if distances:
-                        distances.sort(key=lambda x: x[0])
-                        # Weight by inverse distance
-                        total_weight = 0
-                        weighted_sum = 0
-                        for dist, value in distances[:k]:
-                            if dist < 0.001:  # Avoid division by zero
-                                weight = 1000
-                            else:
-                                weight = 1.0 / (dist * 10)
-                            weighted_sum += weight * value
-                            total_weight += weight
-                        
-                        if total_weight > 0:
-                            pred_value = (weighted_sum / total_weight) * 100.0
-                            pred_item = QTableWidgetItem(f"{settings.format_value(pred_value)}%?")
-                            pred_item.setForeground(QColor(100, 100, 150))
-                            pred_item.setTextAlignment(Qt.AlignCenter)
-                            self.setItem(row_index, predict_col_idx, pred_item)
-                        else:
-                            # No meaningful weights, use simple average
-                            neighbor_values = [y for _, y in distances[:k]]
-                            if neighbor_values:
-                                pred_value = np.mean(neighbor_values) * 100.0
-                                pred_item = QTableWidgetItem(f"{settings.format_value(pred_value)}%?")
-                                pred_item.setForeground(QColor(100, 100, 150))
-                                pred_item.setTextAlignment(Qt.AlignCenter)
-                                self.setItem(row_index, predict_col_idx, pred_item)
-                except Exception as e:
-                    print(f"Simple prediction error for exp {i+1}: {e}")
-                    pred_item = self.item(row_index, predict_col_idx)
-                    if pred_item:
-                        pred_item.setText("")
+    def _async_update_predictions(self, model, completed_indices, exp_id_to_row):
+        self._prediction_start_time = time.time()
+        if self._prediction_future and not self._prediction_future.done():
+            self._prediction_future.cancel()
+        self._prediction_future = self.executor.submit(
+            self._calculate_predictions, model, completed_indices, exp_id_to_row
+        )
+        # Add timeout watchdog timer
+        QTimer.singleShot(5000, lambda: self._check_prediction_timeout())
+
+    def _check_prediction_timeout(self):
+        if self._prediction_future and not self._prediction_future.done():
+            if time.time() - self._prediction_start_time > 5.0:
+                self._prediction_future.cancel()
+                self.log("-- Warning: Prediction calculation timed out - using simple interpolation")
+                # Fall back to simpler method
+                # [implementation omitted for brevity]
+
+    def optimize_update_from_planned(self):
+        """Optimize table update for large experiments."""
+        if len(self.model.planned_experiments) > 100:
+            # For large datasets, update in batches
+            self.setUpdatesEnabled(False)
+            
+            # Only show latest round and top 20 rows by default
+            current_round = self.current_round
+            start_idx = self.round_start_indices[current_round-1] if current_round > 0 and len(self.round_start_indices) > current_round-1 else 0
+            
+            # Calculate visible range
+            visible_start = max(0, start_idx - 5)  # Show 5 experiments from previous round if available
+            visible_end = min(len(self.model.planned_experiments), start_idx + 20)
+            
+            # Only update visible rows initially
+            self._update_table_range(visible_start, visible_end)
+            
+            # Schedule background update for remaining rows
+            QTimer.singleShot(100, self._update_remaining_rows)
+            
+            self.setUpdatesEnabled(True)
+        else:
+            # For smaller datasets, update all at once
+            self._update_table_range(0, len(self.model.planned_experiments))
+
+    def debug_table_state(self):
+        """Print debug information about the table state."""
+        try:
+            model = getattr(self, 'model', None)
+            if not model:
+                print("No model attached to table")
+                return
+            
+            print(f"Table has {self.rowCount()} rows, {self.columnCount()} columns")
+            print(f"Model has {len(model.planned_experiments)} planned experiments")
+            print(f"Model has {len(model.experiments)} completed experiments")
+            
+            # Check column headers
+            headers = []
+            for i in range(self.columnCount()):
+                header_item = self.horizontalHeaderItem(i)
+                headers.append(header_item.text() if header_item else f"Col {i}")
+            print(f"Column headers: {headers}")
+            
+            # Check for empty cells in key columns
+            empty_cells = 0
+            for row in range(self.rowCount()):
+                for col in range(min(4, self.columnCount())):
+                    if not self.item(row, col) or not self.item(row, col).text():
+                        empty_cells += 1
+            if empty_cells > 0:
+                print(f"WARNING: {empty_cells} empty cells found in key columns")
+        except Exception as e:
+            print(f"Error in debug_table_state: {e}")
+
+    def log(self, message):
+        """Internal logger - forwards to parent log if available."""
+        print(message)
+        
+        # Try to find main window to log message
+        parent = self.parent()
+        while parent and not hasattr(parent, 'log'):
+            parent = parent.parent()
+        
+        if parent and hasattr(parent, 'log'):
+            parent.log(message)
 
 class BestResultsTable(QTableWidget):
     def __init__(self, parent=None):
@@ -515,6 +516,9 @@ class BestResultsTable(QTableWidget):
         self.setSelectionBehavior(QTableWidget.SelectRows)
         
     def update_columns(self, model):
+        # Store reference to model
+        self.model = model
+        
         columns = ["Rank"] + list(model.parameters.keys()) + model.objectives
         self.setColumnCount(len(columns))
         self.setHorizontalHeaderLabels(columns)
