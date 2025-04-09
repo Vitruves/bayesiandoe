@@ -284,8 +284,9 @@ def setup_experiment_tab(self):
     
     self.design_method_combo = QComboBox()
     self.design_method_combo.addItems([
-        "TPE", "GPEI", "Random", "Latin Hypercube", "Sobol", "CMA-ES", "NSGA-II"
+        "BoTorch", "TPE", "GPEI", "Random", "Latin Hypercube", "Sobol", "CMA-ES", "NSGA-II"
     ])
+    self.design_method_combo.setCurrentIndex(0)
     
     design_method_layout = QHBoxLayout()
     design_method_layout.addWidget(self.design_method_combo)

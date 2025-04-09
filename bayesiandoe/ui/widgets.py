@@ -363,51 +363,84 @@ class ExperimentTable(QTableWidget):
                         if pred_item:
                              pred_item.setText("")
 
-            # Generate predictions for incomplete experiments if we have data
-            if len(model.experiments) >= 1:
-                for i, planned_params in enumerate(model.planned_experiments):
-                    if i in completed_indices or i not in exp_id_to_row:
-                        continue
-                        
-                    row_index = exp_id_to_row[i]
-                    predict_col_idx = self.columnCount() - 1
+            # Generate predictions for incomplete experiments using BoTorch model
+            if len(model.experiments) >= 3:
+                try:
+                    # Initialize BoTorch model for predictions
+                    import torch
+                    import gpytorch
+                    from botorch.models import SingleTaskGP
+                    from gpytorch.mlls import ExactMarginalLogLikelihood
+                    from botorch.fit import fit_gpytorch_model
                     
-                    # Only predict if we have the first objective (usually yield)
-                    if model.objectives and model.objectives[0] in model.objective_weights:
-                        try:
-                            k = 5  # Number of nearest neighbors to consider
-                            distances = []
-                            target_obj = model.objectives[0]  # First objective to predict
+                    # Extract training data
+                    train_X, train_Y = model._extract_normalized_features_and_targets()
+                    train_X = torch.tensor(train_X, dtype=torch.float64)
+                    train_Y = torch.tensor(train_Y, dtype=torch.float64).reshape(-1, 1)
+                    
+                    # Normalize Y for numerical stability
+                    Y_mean = train_Y.mean()
+                    Y_std = train_Y.std()
+                    if Y_std < 1e-6:
+                        Y_std = torch.tensor(1.0)
+                    train_Y_normalized = (train_Y - Y_mean) / Y_std
+                    
+                    # Build the GP model
+                    gp = SingleTaskGP(train_X, train_Y_normalized)
+                    mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+                    
+                    # Fit model
+                    try:
+                        fit_gpytorch_model(mll)
+                    except Exception as e:
+                        print(f"Warning: GP model fitting failed: {e}")
+                    
+                    # Set to evaluation mode
+                    gp.eval()
+                    
+                    # Get predictions for all planned but incomplete experiments
+                    for i, params in enumerate(model.planned_experiments):
+                        if i not in completed_indices and i in exp_id_to_row:
+                            row_index = exp_id_to_row[i]
                             
-                            for completed_exp in model.experiments:
-                                if "results" in completed_exp and target_obj in completed_exp['results'] and completed_exp['results'][target_obj] is not None:
-                                    dist = _calculate_parameter_distance(planned_params, completed_exp['params'], model.parameters)
-                                    distances.append((dist, completed_exp['results'][target_obj]))
-
-                            if distances:
-                                distances.sort(key=lambda x: x[0])
-                                neighbors = distances[:k]
-                                neighbor_values = [y for _, y in neighbors]
-
-                                if neighbor_values:
-                                    pred_value = np.mean(neighbor_values) * 100.0
-                                    pred_item = QTableWidgetItem(f"{settings.format_value(pred_value)}%?")
-                                    pred_item.setForeground(QColor(100, 100, 150))
-                                    pred_item.setTextAlignment(Qt.AlignCenter)
-                                    self.setItem(row_index, predict_col_idx, pred_item)
-                                else:
-                                    pred_item = self.item(row_index, predict_col_idx)
-                                    if pred_item:
-                                        pred_item.setText("")
-                            else:
-                                pred_item = self.item(row_index, predict_col_idx)
-                                if pred_item:
-                                    pred_item.setText("")
-                        except Exception as e:
-                            print(f"Prediction error for exp {i+1}: {e}")
-                            pred_item = self.item(row_index, predict_col_idx)
-                            if pred_item:
-                                pred_item.setText("")
+                            # Normalize parameters
+                            test_X = torch.tensor([model._normalize_params(params)], dtype=torch.float64)
+                            
+                            # Predict
+                            with torch.no_grad():
+                                posterior = gp.posterior(test_X)
+                                mean = posterior.mean.cpu()
+                                std = posterior.variance.sqrt().cpu()
+                                
+                            # Denormalize prediction
+                            pred_mean = mean * Y_std + Y_mean
+                            
+                            # Convert to percentage for display
+                            pred_value = pred_mean.item() * 100.0
+                            uncertainty = std.item() * Y_std.item() * 100.0
+                            
+                            # Set prediction in table with confidence interval
+                            pred_col_idx = self.columnCount() - 1
+                            pred_text = f"{settings.format_value(pred_value)}%±{settings.format_value(uncertainty)}%"
+                            pred_item = QTableWidgetItem(pred_text)
+                            
+                            # Color code by prediction confidence
+                            confidence_level = 1.0 - min(uncertainty / 20.0, 0.8)  # Max 80% fading
+                            color_intensity = int(220 * confidence_level)
+                            pred_item.setBackground(QColor(220, color_intensity, 255))
+                            pred_item.setForeground(QColor(0, 0, 150))
+                            pred_item.setTextAlignment(Qt.AlignCenter)
+                            self.setItem(row_index, pred_col_idx, pred_item)
+                            
+                except Exception as e:
+                    print(f"BoTorch prediction error: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Fall back to simpler prediction method
+                    self._simple_distance_predictions(model, completed_indices, exp_id_to_row)
+            else:
+                # Not enough data for GP, use simpler method
+                self._simple_distance_predictions(model, completed_indices, exp_id_to_row)
 
             self.verticalScrollBar().setValue(vscroll)
             
@@ -415,6 +448,65 @@ class ExperimentTable(QTableWidget):
                  self.selectRow(exp_id_to_row[selected_exp_id])
         except Exception as e:
             print(f"Error in update_from_planned: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _simple_distance_predictions(self, model, completed_indices, exp_id_to_row):
+        """Fallback prediction method using simple distance-based neighbor averaging"""
+        import numpy as np
+        
+        for i, planned_params in enumerate(model.planned_experiments):
+            if i in completed_indices or i not in exp_id_to_row:
+                continue
+            
+            row_index = exp_id_to_row[i]
+            predict_col_idx = self.columnCount() - 1
+            
+            # Only predict if we have the first objective (usually yield)
+            if model.objectives and model.objectives[0] in model.objective_weights:
+                try:
+                    k = 5  # Number of nearest neighbors to consider
+                    distances = []
+                    target_obj = model.objectives[0]  # First objective to predict
+                    
+                    for completed_exp in model.experiments:
+                        if "results" in completed_exp and target_obj in completed_exp['results'] and completed_exp['results'][target_obj] is not None:
+                            dist = _calculate_parameter_distance(planned_params, completed_exp['params'], model.parameters)
+                            distances.append((dist, completed_exp['results'][target_obj]))
+
+                    if distances:
+                        distances.sort(key=lambda x: x[0])
+                        # Weight by inverse distance
+                        total_weight = 0
+                        weighted_sum = 0
+                        for dist, value in distances[:k]:
+                            if dist < 0.001:  # Avoid division by zero
+                                weight = 1000
+                            else:
+                                weight = 1.0 / (dist * 10)
+                            weighted_sum += weight * value
+                            total_weight += weight
+                        
+                        if total_weight > 0:
+                            pred_value = (weighted_sum / total_weight) * 100.0
+                            pred_item = QTableWidgetItem(f"{settings.format_value(pred_value)}%?")
+                            pred_item.setForeground(QColor(100, 100, 150))
+                            pred_item.setTextAlignment(Qt.AlignCenter)
+                            self.setItem(row_index, predict_col_idx, pred_item)
+                        else:
+                            # No meaningful weights, use simple average
+                            neighbor_values = [y for _, y in distances[:k]]
+                            if neighbor_values:
+                                pred_value = np.mean(neighbor_values) * 100.0
+                                pred_item = QTableWidgetItem(f"{settings.format_value(pred_value)}%?")
+                                pred_item.setForeground(QColor(100, 100, 150))
+                                pred_item.setTextAlignment(Qt.AlignCenter)
+                                self.setItem(row_index, predict_col_idx, pred_item)
+                except Exception as e:
+                    print(f"Simple prediction error for exp {i+1}: {e}")
+                    pred_item = self.item(row_index, predict_col_idx)
+                    if pred_item:
+                        pred_item.setText("")
 
 class BestResultsTable(QTableWidget):
     def __init__(self, parent=None):

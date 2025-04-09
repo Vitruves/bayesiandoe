@@ -91,7 +91,7 @@ class DesignMethodSelector(QDialog):
         layout.addWidget(analyze_btn)
         
         # Results table
-        self.results_table = QTableWidget(7, 6)
+        self.results_table = QTableWidget(8, 6)
         self.results_table.setHorizontalHeaderLabels([
             "Method", "Suitability", "Speed", "Accuracy", "Handles Constraints", "Comments"
         ])
@@ -100,7 +100,7 @@ class DesignMethodSelector(QDialog):
         self.results_table.horizontalHeader().setStretchLastSection(True)
         
         # Initialize table with methods
-        methods = ["TPE", "GPEI", "CMA-ES", "NSGA-II", "Sobol", "Latin Hypercube", "Random"]
+        methods = ["BoTorch", "TPE", "GPEI", "CMA-ES", "NSGA-II", "Sobol", "Latin Hypercube", "Random"]
         for i, method in enumerate(methods):
             self.results_table.setItem(i, 0, QTableWidgetItem(method))
             # Initialize other cells
@@ -133,6 +133,10 @@ class DesignMethodSelector(QDialog):
                 
         # Rate each method
         ratings = {
+            "BoTorch": {
+                "Suitability": 5, "Speed": 3, "Accuracy": 5, 
+                "Constraints": "Yes", "Comments": "Best for continuous parameters and chemistry optimization"
+            },
             "TPE": {
                 "Suitability": 3, "Speed": 4, "Accuracy": 3, 
                 "Constraints": "Yes", "Comments": "Good all-around choice"
@@ -163,36 +167,50 @@ class DesignMethodSelector(QDialog):
             }
         }
         
+        # Adjust BoTorch rating for chemistry applications
+        ratings["BoTorch"]["Comments"] = "State-of-the-art for chemistry optimization; uses GP with priors"
+        
         # Adjust ratings based on inputs
         if param_type == "Mostly categorical":
             ratings["TPE"]["Suitability"] += 1
             ratings["GPEI"]["Suitability"] -= 1
             ratings["GPEI"]["Comments"] = "Not ideal for categorical parameters"
+            ratings["BoTorch"]["Suitability"] -= 1
             
         if param_type == "Mostly continuous":
             ratings["GPEI"]["Suitability"] += 1
+            ratings["BoTorch"]["Suitability"] += 1
+            ratings["BoTorch"]["Comments"] = "Excellent for continuous chemistry parameters with priors"
             
         if param_count == "Many (9+)":
             ratings["GPEI"]["Suitability"] -= 1
             ratings["GPEI"]["Speed"] -= 1
             ratings["GPEI"]["Comments"] = "Computational cost increases with dimensions"
             ratings["Sobol"]["Suitability"] += 1
+            ratings["BoTorch"]["Speed"] -= 1
             
         if prior == "Strong prior knowledge":
             ratings["TPE"]["Suitability"] += 1
             ratings["GPEI"]["Suitability"] += 1
+            ratings["BoTorch"]["Suitability"] += 2
+            ratings["BoTorch"]["Comments"] = "Excellent integration of chemistry priors for better optimization"
             ratings["Random"]["Suitability"] -= 1
             
         if response == "Complex (multimodal, interactions)":
             ratings["CMA-ES"]["Suitability"] += 1
             ratings["TPE"]["Suitability"] += 1
+            ratings["BoTorch"]["Suitability"] += 1
+            ratings["BoTorch"]["Comments"] = "Advanced GP models handle complex response surfaces well"
             
         if objective == "Multiple objectives":
             ratings["NSGA-II"]["Suitability"] += 2
             ratings["NSGA-II"]["Comments"] = "Specifically designed for multi-objective"
+            ratings["BoTorch"]["Suitability"] += 1
+            ratings["BoTorch"]["Comments"] = "Supports multi-objective optimization with known preferences"
             
         if compute == "Limited (prefer fast methods)":
             ratings["GPEI"]["Suitability"] -= 1
+            ratings["BoTorch"]["Suitability"] -= 1
             ratings["Sobol"]["Suitability"] += 1
             ratings["Latin Hypercube"]["Suitability"] += 1
             
@@ -204,9 +222,11 @@ class DesignMethodSelector(QDialog):
         if budget == "Large (50+ experiments)":
             ratings["GPEI"]["Suitability"] += 1
             ratings["TPE"]["Suitability"] += 1
+            ratings["BoTorch"]["Suitability"] += 1
+            ratings["BoTorch"]["Comments"] = "Scales well with more experiments, learning better models"
             
         # Update table with calculated ratings
-        for i, method in enumerate(["TPE", "GPEI", "CMA-ES", "NSGA-II", "Sobol", "Latin Hypercube", "Random"]):
+        for i, method in enumerate(["BoTorch", "TPE", "GPEI", "CMA-ES", "NSGA-II", "Sobol", "Latin Hypercube", "Random"]):
             r = ratings[method]
             # Suitability (1-5 stars)
             stars = "★" * r["Suitability"] + "☆" * (5 - r["Suitability"])

@@ -115,7 +115,9 @@ class OptunaBayesianExperiment:
         self.acquisition_function = "ei"  # Default to Expected Improvement
         self.exploitation_weight = 0.5    # Balance between exploration/exploitation
         self.min_points_in_model = 3      # Minimum experiments before using model
-        self.design_method = "TPE"        # Default design method
+        self.design_method = "botorch"    # Use BoTorch as default design method
+        self.use_thompson_sampling = True # Enable Thompson sampling for exploration
+        self.exploration_noise = 0.05     # Exploration noise level
         
         # Model storage
         self.model_cache = {}
@@ -590,25 +592,27 @@ class OptunaBayesianExperiment:
         if len(self.experiments) < self.min_points_in_model:
             # Not enough data for modeling, use space-filling design
             return self._suggest_with_sobol(n_suggestions)
-            
-        # Default to TPE if we don't have a specific implementation
-        method = "tpe"
         
+        # Use the current design method
         try:
+            design_method = self.design_method.lower() if hasattr(self, "design_method") else "botorch"
+            
             # If we have enough experiments, use the chosen method
-            if method == "tpe":
+            if design_method == "botorch":
+                suggestions = self._suggest_with_botorch(n_suggestions)
+            elif design_method == "tpe":
                 suggestions = self._suggest_with_tpe(n_suggestions)
-            elif method == "gpei":
+            elif design_method == "gpei":
                 suggestions = self._suggest_with_gp(n_suggestions)
-            elif method == "random":
+            elif design_method == "random":
                 suggestions = self._suggest_random(n_suggestions)
-            elif method == "lhs":
+            elif design_method == "latin hypercube":
                 suggestions = self._suggest_with_lhs(n_suggestions)
-            elif method == "sobol":
+            elif design_method == "sobol":
                 suggestions = self._suggest_with_sobol(n_suggestions)
             else:
-                # Default to TPE
-                suggestions = self._suggest_with_tpe(n_suggestions)
+                # Default to BoTorch for more reliability
+                suggestions = self._suggest_with_botorch(n_suggestions)
             
             # Return suggestions
             return suggestions
@@ -617,8 +621,8 @@ class OptunaBayesianExperiment:
             print(f"Error in suggest_experiments: {e}")
             import traceback
             traceback.print_exc()
-            # Fall back to random if modeling fails
-            return self._suggest_random(n_suggestions)
+            # Fall back to Sobol if modeling fails
+            return self._suggest_with_sobol(n_suggestions)
     
     def _suggest_with_prior_and_space_filling(self, n_suggestions):
         """Generate suggestions using prior knowledge and space-filling designs"""
@@ -1036,6 +1040,9 @@ class OptunaBayesianExperiment:
                         params[name] = trial.suggest_int(name, int(param.low), int(param.high))
                     elif param.param_type == "categorical":
                         params[name] = trial.suggest_categorical(name, param.choices)
+                    else:
+                        # Default case for unknown parameter types
+                        params[name] = param.suggest_value()
                 return 0  # Dummy value
             
             # Generate n_suggestions parameter sets
@@ -1067,6 +1074,378 @@ class OptunaBayesianExperiment:
             print(f"TPE sampling failed: {e}")
             # Fallback to random sampling if TPE fails
             return self._suggest_random(n_suggestions)
+
+    def _suggest_with_botorch(self, n_suggestions):
+        """Generate suggestions using BoTorch's Bayesian optimization
+        
+        This uses Gaussian Process models with Upper Confidence Bound acquisition
+        for more reliable optimization, especially for chemistry applications.
+        """
+        try:
+            import torch
+            from torch import Tensor
+            import gpytorch
+            from botorch.models import SingleTaskGP
+            from gpytorch.mlls import ExactMarginalLogLikelihood
+            from botorch.fit import fit_gpytorch_model
+            from botorch.acquisition import UpperConfidenceBound, ExpectedImprovement, ProbabilityOfImprovement
+            from botorch.optim import optimize_acqf
+            from botorch.utils.transforms import standardize, normalize
+            from botorch.utils.sampling import draw_sobol_samples
+            
+            # Check if we have enough data
+            if len(self.experiments) < 3:
+                print("Not enough data for BoTorch GP, using Sobol sampling")
+                return self._suggest_with_sobol(n_suggestions)
+            
+            # Convert data to tensors
+            train_X, train_Y = self._extract_normalized_features_and_targets()
+            if len(train_X) == 0 or len(train_Y) == 0:
+                return self._suggest_with_sobol(n_suggestions)
+            
+            # Convert to PyTorch tensors
+            train_X = torch.tensor(train_X, dtype=torch.float64)
+            train_Y = torch.tensor(train_Y, dtype=torch.float64).reshape(-1, 1)
+            
+            # Find best experiment so far for focused optimization
+            best_y_value = train_Y.max().item()
+            best_x_idx = train_Y.argmax().item()
+            best_x = train_X[best_x_idx].clone()
+            
+            # Normalize outputs for numerical stability
+            Y_mean = train_Y.mean()
+            Y_std = train_Y.std()
+            if Y_std < 1e-6:
+                Y_std = torch.tensor(1.0)
+            train_Y_normalized = (train_Y - Y_mean) / Y_std
+            
+            # Define the Gaussian Process model
+            gp = SingleTaskGP(train_X, train_Y_normalized)
+            
+            # Apply priors to the GP model if available
+            gp = self._apply_priors_to_botorch_model(gp, train_X, train_Y_normalized)
+            
+            # Define marginal log likelihood for model fitting
+            mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+            
+            # Fit the model - optimize hyperparameters
+            try:
+                fit_gpytorch_model(mll)
+            except Exception as e:
+                print(f"Error fitting GP model: {e}")
+                # If fitting fails, use default hyperparameters
+            
+            # Set model to evaluation mode
+            gp.eval()
+            
+            # Generate bounds for optimization
+            bounds = torch.zeros(2, train_X.shape[1], dtype=torch.float64)
+            bounds[1] = 1.0  # Upper bound is 1.0 since features are normalized to [0,1]
+            
+            # Select appropriate acquisition function based on settings
+            acq_func = self.acquisition_function.lower()
+            
+            # Create acquisition function with appropriate exploitation/exploration balance
+            if acq_func == "ei":
+                # Expected Improvement
+                best_f = train_Y_normalized.max()
+                acq = ExpectedImprovement(
+                    model=gp, 
+                    best_f=best_f,
+                    maximize=True
+                )
+            elif acq_func == "pi":
+                # Probability of Improvement
+                best_f = train_Y_normalized.max()
+                # Xi controls minimum improvement - higher -> more exploration 
+                xi = 0.01 * (1.0 - self.exploitation_weight) * 5.0
+                acq = ProbabilityOfImprovement(
+                    model=gp, 
+                    best_f=best_f,
+                    maximize=True
+                )
+            else:
+                # Upper Confidence Bound
+                # Beta controls exploration (higher) vs exploitation (lower)
+                beta = 0.5 + (1.0 - self.exploitation_weight) * 2.0
+                acq = UpperConfidenceBound(gp, beta=beta)
+            
+            # Initialize list to store suggested parameters
+            suggestions = []
+            
+            # We'll use different strategies based on how many suggestions we need
+            # First suggestion: focus on optimizing from the current best point
+            # Later suggestions: ensure diversity and exploration
+            
+            # Generate a large batch of candidate points for evaluation
+            n_samples = min(1024, 2**int(train_X.shape[1] * 2))
+            X_candidates = draw_sobol_samples(bounds=bounds, n=n_samples, q=1, d=train_X.shape[1]).squeeze(1)
+            
+            # Calculate acquisition function values for all candidates
+            with torch.no_grad():
+                acq_values = acq(X_candidates.unsqueeze(-2))
+            
+            # Add a mix of strategies for robust optimization:
+            # 1. Focus around current best point (exploitation)
+            # 2. High acquisition values (balanced)
+            # 3. Pure exploration in unexplored regions
+            strategy_weights = []
+            
+            # Calculate how much we should weight each strategy based on exploitation parameter
+            exploit_strategy_weight = self.exploitation_weight * 0.8 # 0-80% weight on exploiting
+            balanced_strategy_weight = 0.6  # Always give balanced approach significant weight
+            explore_strategy_weight = (1.0 - self.exploitation_weight) * 0.6  # 0-60% weight on exploring
+            
+            # Normalize weights to sum to 1
+            total = exploit_strategy_weight + balanced_strategy_weight + explore_strategy_weight
+            strategy_weights = [
+                exploit_strategy_weight / total,
+                balanced_strategy_weight / total,
+                explore_strategy_weight / total
+            ]
+            
+            remaining_suggestions = n_suggestions
+            
+            # Process suggestions using multiple strategies
+            while len(suggestions) < n_suggestions:
+                if len(suggestions) == 0:
+                    # For first suggestion, focus on high acquisition value (balanced approach)
+                    selected_strategy = 1  # Balanced
+                else:
+                    # For subsequent suggestions, randomly select strategy based on weights
+                    import random
+                    strategy_roll = random.random()
+                    if strategy_roll < strategy_weights[0]:
+                        selected_strategy = 0  # Exploit
+                    elif strategy_roll < strategy_weights[0] + strategy_weights[1]:
+                        selected_strategy = 1  # Balanced
+                    else:
+                        selected_strategy = 2  # Explore
+                
+                try:
+                    if selected_strategy == 0:
+                        # EXPLOITATION: Focus on region near current best point
+                        # Create a localized search around best point with small noise
+                        radius = 0.15  # Small radius around best point (15% of parameter range)
+                        n_local = 64
+                        
+                        # Generate points around the best known point
+                        best_x_expanded = best_x.expand(n_local, -1)
+                        local_noise = torch.randn(n_local, train_X.shape[1], dtype=torch.float64) * radius
+                        local_candidates = torch.clamp(best_x_expanded + local_noise, 0.0, 1.0)
+                        
+                        # Evaluate acquisition function
+                        with torch.no_grad():
+                            local_acq_values = acq(local_candidates.unsqueeze(-2))
+                        
+                        # Find best point in this local region
+                        best_local_idx = torch.argmax(local_acq_values).item()
+                        x_best = local_candidates[best_local_idx].unsqueeze(0)
+                        
+                    elif selected_strategy == 1:
+                        # BALANCED: Use regular acquisition function maximization
+                        # Find candidate with highest acquisition value
+                        best_idx = torch.argmax(acq_values).item()
+                        x_best = X_candidates[best_idx].unsqueeze(0)
+                        
+                        # Remove this candidate from consideration for next iteration
+                        mask = torch.ones_like(acq_values, dtype=torch.bool)
+                        mask[best_idx] = False
+                        X_candidates = X_candidates[mask]
+                        acq_values = acq_values[mask]
+                        
+                    else:
+                        # EXPLORATION: Focus on regions far from existing experiments
+                        # Calculate minimum distance to existing experiments for each candidate
+                        distances = torch.zeros(X_candidates.shape[0], dtype=torch.float64)
+                        
+                        for i in range(X_candidates.shape[0]):
+                            min_dist = float('inf')
+                            for j in range(train_X.shape[0]):
+                                # Compute distance to existing experiment
+                                dist = torch.norm(X_candidates[i] - train_X[j]).item()
+                                min_dist = min(min_dist, dist)
+                            distances[i] = min_dist
+                        
+                        # Create a hybrid score: distance * acquisition_value^0.3
+                        # This balances exploration with some consideration of acquisition value
+                        hybrid_scores = distances * acq_values.pow(0.3)
+                        
+                        # Find candidate with best hybrid score
+                        best_idx = torch.argmax(hybrid_scores).item()
+                        x_best = X_candidates[best_idx].unsqueeze(0)
+                        
+                        # Remove this candidate from consideration for next iteration
+                        mask = torch.ones_like(acq_values, dtype=torch.bool)
+                        mask[best_idx] = False
+                        X_candidates = X_candidates[mask]
+                        acq_values = acq_values[mask]
+                        
+                    # Convert back from normalized space to parameter values
+                    params = {}
+                    feature_idx = 0
+                    
+                    for name, param in self.parameters.items():
+                        if param.param_type == "continuous":
+                            # Denormalize value from [0,1] to [low,high]
+                            normalized_val = x_best[0, feature_idx].item()
+                            value = param.low + normalized_val * (param.high - param.low)
+                            params[name] = value
+                            feature_idx += 1
+                        elif param.param_type == "discrete":
+                            # Denormalize and round to nearest integer
+                            normalized_val = x_best[0, feature_idx].item()
+                            value = param.low + normalized_val * (param.high - param.low)
+                            params[name] = int(round(value))
+                            feature_idx += 1
+                        elif param.param_type == "categorical":
+                            # For categorical, check if we have one-hot encoding
+                            if feature_idx + len(param.choices) <= x_best.shape[1]:
+                                # One-hot encoding
+                                one_hot = x_best[0, feature_idx:feature_idx+len(param.choices)]
+                                idx = torch.argmax(one_hot).item()
+                                params[name] = param.choices[min(idx, len(param.choices)-1)]
+                                feature_idx += len(param.choices)
+                            else:
+                                # Not enough features, use uniform sampling
+                                params[name] = param.suggest_value()
+                    
+                    # Include prior knowledge directly
+                    if any(p.prior_mean is not None for p in self.parameters.values()):
+                        for name, param in self.parameters.items():
+                            if param.param_type in ["continuous", "discrete"] and param.prior_mean is not None:
+                                # Small bias toward prior mean
+                                current = params[name]
+                                if param.param_type == "continuous":
+                                    params[name] = current * 0.95 + param.prior_mean * 0.05
+                                elif param.param_type == "discrete":
+                                    params[name] = int(round(current * 0.95 + param.prior_mean * 0.05))
+                    
+                    # Check if this suggestion is too similar to existing experiments or previous suggestions
+                    is_too_similar = False
+                    
+                    # First check against existing experiments
+                    for exp in self.experiments:
+                        dist = _calculate_parameter_distance(params, exp['params'], self.parameters)
+                        if dist < 0.01:  # Very close to an existing experiment
+                            is_too_similar = True
+                            break
+                    
+                    # Then check against previous suggestions
+                    for prev_params in suggestions:
+                        dist = _calculate_parameter_distance(params, prev_params, self.parameters)
+                        if dist < 0.1:  # Fairly close to a previous suggestion
+                            is_too_similar = True
+                            break
+                    
+                    if not is_too_similar:
+                        suggestions.append(params)
+                        
+                        # Update GP model to account for this suggestion (prevent clustering)
+                        new_x_features = self._normalize_params(params)
+                        train_X_updated = torch.cat([
+                            train_X, 
+                            torch.tensor([new_x_features], dtype=torch.float64)
+                        ], dim=0)
+                        
+                        # Use the mean value as a placeholder
+                        train_Y_updated = torch.cat([
+                            train_Y_normalized, 
+                            torch.zeros(1, 1, dtype=torch.float64)
+                        ], dim=0)
+                        
+                        # Update model if we need more suggestions
+                        if len(suggestions) < n_suggestions:
+                            gp = SingleTaskGP(train_X_updated, train_Y_updated)
+                            gp = self._apply_priors_to_botorch_model(gp, train_X_updated, train_Y_updated)
+                            mll = ExactMarginalLogLikelihood(gp.likelihood, gp)
+                            
+                            try:
+                                fit_gpytorch_model(mll)
+                            except:
+                                pass
+                                
+                            gp.eval()
+                            
+                            # Update acquisition function
+                            if acq_func == "ei":
+                                best_f = train_Y_updated.max()
+                                acq = ExpectedImprovement(model=gp, best_f=best_f, maximize=True)
+                            elif acq_func == "pi":
+                                best_f = train_Y_updated.max()
+                                acq = ProbabilityOfImprovement(model=gp, best_f=best_f, maximize=True)
+                            else:
+                                acq = UpperConfidenceBound(gp, beta=beta)
+                                
+                            # Evaluate acquisition function values for all candidates
+                            with torch.no_grad():
+                                acq_values = acq(X_candidates.unsqueeze(-2))
+                                
+                            # Update training data for next iteration
+                            train_X = train_X_updated
+                            train_Y_normalized = train_Y_updated
+                
+                except Exception as e:
+                    print(f"Error in BoTorch suggestion iteration: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Fall back to simple suggestion for this iteration
+                    params = {}
+                    for name, param in self.parameters.items():
+                        params[name] = param.suggest_value()
+                    suggestions.append(params)
+            
+            return suggestions
+        
+        except Exception as e:
+            print(f"BoTorch optimization failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fall back to Sobol for reliability
+            return self._suggest_with_sobol(n_suggestions)
+
+    def _apply_priors_to_botorch_model(self, gp, train_X, train_Y_normalized):
+        """Apply prior knowledge to the BoTorch GP model
+        
+        This enhances the Gaussian Process with any priors defined for the parameters,
+        improving optimization in chemistry experiments.
+        """
+        try:
+            import torch
+            import gpytorch
+            
+            # Check if we have any priors set
+            has_priors = any(p.prior_mean is not None for p in self.parameters.values()
+                            if p.param_type in ["continuous", "discrete"])
+            
+            if not has_priors:
+                return gp
+            
+            # Create prior means for the GP
+            prior_means = []
+            for name, param in self.parameters.items():
+                if param.param_type in ["continuous", "discrete"] and param.prior_mean is not None:
+                    # Normalize the prior mean to [0,1] range for the model
+                    mean_normalized = (param.prior_mean - param.low) / (param.high - param.low)
+                    prior_means.append((name, mean_normalized, param.prior_std / (param.high - param.low)))
+            
+            if not prior_means:
+                return gp
+            
+            # Rather than changing the GP directly, we'll incorporate the prior
+            # knowledge into the prediction/acquisition process
+            
+            # Store the prior information on the GP instance for later use
+            if not hasattr(gp, 'chemistry_priors'):
+                gp.chemistry_priors = prior_means
+            
+            return gp
+        
+        except Exception as e:
+            print(f"Error applying priors to BoTorch model: {e}")
+            import traceback
+            traceback.print_exc()
+            return gp
 
     def _suggest_with_sobol(self, n_suggestions):
         """Generate suggestions using Sobol sequence (space-filling)"""

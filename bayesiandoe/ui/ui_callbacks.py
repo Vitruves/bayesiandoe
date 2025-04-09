@@ -240,25 +240,31 @@ def show_design_method_help(self):
                 method = selector.results_table.item(selected_row, 0).text()
                 self.design_method_combo.setCurrentText(method)
                 self.log(f"-- Design method updated to: {method}")
+                # Update the model's design method
+                self.model.design_method = method.lower()
             else:
-                # Use the highest rated method
-                for i in range(selector.results_table.rowCount()):
-                    if selector.results_table.item(i, 0).background().color().name() == '#e6ffe6':
-                        method = selector.results_table.item(i, 0).text()
-                        self.design_method_combo.setCurrentText(method)
-                        self.log(f"-- Design method updated to: {method}")
-                        break
+                # Default to BoTorch as the highest rated method
+                self.design_method_combo.setCurrentText("BoTorch")
+                self.model.design_method = "botorch"
+                self.log("-- Design method updated to: BoTorch (default recommended)")
     except Exception as e:
         self.log(f"-- Error showing design method help: {str(e)} - Error")
-        # Show a simple message box as fallback
+        # Show a simple message box as fallback and set BoTorch as default
         from PySide6.QtWidgets import QMessageBox
         QMessageBox.information(
             self,
             "Sampling Methods Information",
             "Various sampling methods are available to optimize your experimental design.\n\n"
-            "TPE: Good for categorical parameters\n"
-            "GPEI: Best for continuous parameters\n"
-            "Latin Hypercube: Good space coverage for initial designs\n"
-            "Sobol: Excellent for high dimensional spaces\n"
-            "Random: Simple baseline approach"
-        ) 
+            "BoTorch: State-of-the-art Bayesian optimization using Gaussian Processes. "
+            "Excellent for continuous parameters and chemical optimization. "
+            "Incorporates prior knowledge effectively and provides uncertainty quantification.\n\n"
+            "TPE: Good for categorical parameters and mixed parameter types.\n\n"
+            "GPEI: Best for continuous parameters, provides good uncertainty estimates.\n\n"
+            "Latin Hypercube: Good space coverage for initial designs.\n\n"
+            "Sobol: Excellent for high dimensional spaces.\n\n"
+            "Random: Simple baseline approach for comparison."
+        )
+        # Set BoTorch as the default
+        self.design_method_combo.setCurrentText("BoTorch")
+        self.model.design_method = "botorch"
+        self.log("-- Design method set to: BoTorch (recommended default)") 

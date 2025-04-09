@@ -504,6 +504,10 @@ def generate_initial_experiments(self):
             
         # Generate initial experiments
         method = self.design_method_combo.currentText().lower()
+        self.log(f"-- Using {method} design method")
+        
+        # Update model's design method
+        self.model.design_method = method
         
         if hasattr(self.model, 'planned_experiments'):
             self.model.planned_experiments = []
@@ -512,7 +516,10 @@ def generate_initial_experiments(self):
             
         self.round_start_indices = []
         
-        if method == "tpe":
+        # Call the appropriate suggestion method based on design method
+        if method == "botorch":
+            suggestions = self.model._suggest_with_botorch(n_experiments)
+        elif method == "tpe":
             suggestions = self.model._suggest_with_tpe(n_experiments)
         elif method == "gpei":
             suggestions = self.model._suggest_with_gp(n_experiments)
@@ -523,8 +530,9 @@ def generate_initial_experiments(self):
         elif method == "sobol":
             suggestions = self.model._suggest_with_sobol(n_experiments)
         else:
-            # Default to TPE if method not recognized
-            suggestions = self.model._suggest_with_tpe(n_experiments)
+            # Default to BoTorch if method not recognized
+            self.log(f"-- Unknown design method '{method}', using BoTorch - Warning")
+            suggestions = self.model._suggest_with_botorch(n_experiments)
             
         self.model.planned_experiments = suggestions
         self.current_round = 1
@@ -535,6 +543,8 @@ def generate_initial_experiments(self):
         self.log(f"-- Generated {n_experiments} initial experiments with {method.upper()} sampling - Success")
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         self.log(f"-- Failed to generate experiments: {str(e)} - Error")
 
 def generate_next_experiments(self):
