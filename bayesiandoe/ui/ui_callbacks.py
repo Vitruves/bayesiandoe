@@ -9,44 +9,53 @@ from .ui_visualization import update_prior_plot
 from .dialogs import PriorDialog
 
 def update_objectives(self):
-    objectives = []
-    weights = {}
-    
-    if self.obj_yield_check.isChecked():
-        objectives.append("yield")
-        weights["yield"] = self.weight_yield_spin.value()
-    
-    if self.obj_purity_check.isChecked():
-        objectives.append("purity")
-        weights["purity"] = self.weight_purity_spin.value()
-    
-    if self.obj_selectivity_check.isChecked():
-        objectives.append("selectivity")
-        weights["selectivity"] = self.weight_selectivity_spin.value()
-    
-    if not objectives:
-        QMessageBox.warning(self, "Warning", "At least one objective must be selected.")
-        self.obj_yield_check.setChecked(True)
-        objectives.append("yield")
-        weights["yield"] = self.weight_yield_spin.value()
-    
-    self.model.objectives = objectives
-    self.model.objective_weights = weights
-    
-    update_ui_from_model(self)
-    
-    log(self, f"-- Objectives updated: {', '.join(objectives)} - Success")
+    """Update the objectives and weights from the UI controls"""
+    try:
+        objectives = {}
+        for row in range(self.objectives_table.rowCount()):
+            obj_item = self.objectives_table.item(row, 0)
+            weight_item = self.objectives_table.item(row, 1)
+            
+            if obj_item and obj_item.text().strip() and weight_item and weight_item.text().strip():
+                obj_name = obj_item.text().strip().lower()
+                try:
+                    weight = float(weight_item.text().strip())
+                    objectives[obj_name] = weight
+                except ValueError:
+                    pass
+        
+        if objectives:
+            self.model.set_objectives(objectives)
+            self.log(f"-- Objectives updated: {', '.join(objectives.keys())} - Success")
+        else:
+            self.log("-- No valid objectives found. Please add at least one objective - Error")
+    except Exception as e:
+        self.log(f"-- Failed to update objectives: {str(e)} - Error")
 
-def show_registry_item_tooltip(self, item, reg_type, category):
+def show_registry_item_tooltip(self, item):
+    """Show tooltip with detailed properties for registry items"""
     if not item:
         return
         
+    registry_type = self.registry_type_combo.currentText().lower()
+    category = self.registry_category_combo.currentText()
     item_name = item.text()
-    properties = self.registry_manager.get_item_properties(reg_type, category, item_name)
+    
+    properties = self.registry_manager.get_item_properties(registry_type, category, item_name)
     
     if properties:
-        tooltip = "\n".join([f"{k}: {v}" for k, v in properties.items() if k != "color"])
-        item.setToolTip(tooltip)
+        tooltip = "<html><body><table>"
+        tooltip += f"<tr><th colspan='2'>{item_name}</th></tr>"
+        
+        for key, value in properties.items():
+            if key != "color":  # Skip color property
+                tooltip += f"<tr><td>{key}</td><td>{value}</td></tr>"
+                
+        tooltip += "</table></body></html>"
+        
+        self.registry_list.setToolTip(tooltip)
+    else:
+        self.registry_list.setToolTip("")
 
 def refresh_registry(self):
     for reg_type, categories in self.registry_lists.items():
@@ -206,4 +215,43 @@ def on_param_button_clicked(self, param_name):
             
         update_prior_table(self)
         if self.viz_param_combo.currentText() == param_name:
-            update_prior_plot(self) 
+            update_prior_plot(self)
+
+def show_design_method_help(self):
+    """Show a dialog to help users choose the best design method."""
+    try:
+        from .design_selector import DesignMethodSelector
+        from PySide6.QtGui import QColor
+        
+        selector = DesignMethodSelector(self)
+        result = selector.exec()
+        
+        if result:
+            # Get the selected method from the dialog
+            selected_row = selector.results_table.currentRow()
+            if selected_row >= 0:
+                method = selector.results_table.item(selected_row, 0).text()
+                self.design_method_combo.setCurrentText(method)
+                self.log(f"-- Design method updated to: {method}")
+            else:
+                # Use the highest rated method
+                for i in range(selector.results_table.rowCount()):
+                    if selector.results_table.item(i, 0).background().color().name() == '#e6ffe6':
+                        method = selector.results_table.item(i, 0).text()
+                        self.design_method_combo.setCurrentText(method)
+                        self.log(f"-- Design method updated to: {method}")
+                        break
+    except Exception as e:
+        self.log(f"-- Error showing design method help: {str(e)} - Error")
+        # Show a simple message box as fallback
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.information(
+            self,
+            "Sampling Methods Information",
+            "Various sampling methods are available to optimize your experimental design.\n\n"
+            "TPE: Good for categorical parameters\n"
+            "GPEI: Best for continuous parameters\n"
+            "Latin Hypercube: Good space coverage for initial designs\n"
+            "Sobol: Excellent for high dimensional spaces\n"
+            "Random: Simple baseline approach"
+        ) 

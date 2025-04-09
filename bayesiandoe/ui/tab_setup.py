@@ -15,7 +15,7 @@ from .canvas import MplCanvas, Mpl3DCanvas
 from .ui_callbacks import (
     update_objectives, refresh_registry, show_registry_item_tooltip,
     on_prior_selected, update_best_results, show_result_details,
-    show_prior_help, on_param_button_clicked
+    show_prior_help, on_param_button_clicked, show_design_method_help
 )
 from .ui_visualization import (
     update_prior_plot, update_results_plot, update_model_plot,
@@ -154,46 +154,28 @@ def setup_setup_tab(self):
     
     refresh_registry(self)
     
-    obj_group = QGroupBox("Optimization Objectives")
-    obj_layout = QGridLayout(obj_group)
+    objectives_group = QGroupBox("Optimization Objectives")
+    objectives_layout = QVBoxLayout(objectives_group)
     
-    self.obj_yield_check = QCheckBox("Yield")
-    self.obj_purity_check = QCheckBox("Purity")
-    self.obj_selectivity_check = QCheckBox("Selectivity")
+    self.objectives_table = QTableWidget(3, 2)
+    self.objectives_table.setHorizontalHeaderLabels(["Objective", "Weight"])
+    self.objectives_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+    self.objectives_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
     
-    self.weight_yield_spin = QDoubleSpinBox()
-    self.weight_purity_spin = QDoubleSpinBox()
-    self.weight_selectivity_spin = QDoubleSpinBox()
+    self.objectives_table.setItem(0, 0, QTableWidgetItem("yield"))
+    self.objectives_table.setItem(0, 1, QTableWidgetItem("1.0"))
     
-    self.weight_yield_spin.setRange(0.1, 10)
-    self.weight_purity_spin.setRange(0.1, 10)
-    self.weight_selectivity_spin.setRange(0.1, 10)
+    objectives_layout.addWidget(self.objectives_table)
     
-    self.weight_yield_spin.setValue(1.0)
-    self.weight_purity_spin.setValue(1.0)
-    self.weight_selectivity_spin.setValue(1.0)
-    
-    self.obj_yield_check.setChecked(True)
-    self.obj_purity_check.setChecked(True)
-    self.obj_selectivity_check.setChecked(True)
-    
-    obj_layout.addWidget(self.obj_yield_check, 0, 0)
-    obj_layout.addWidget(QLabel("Weight:"), 0, 1)
-    obj_layout.addWidget(self.weight_yield_spin, 0, 2)
-    
-    obj_layout.addWidget(self.obj_purity_check, 1, 0)
-    obj_layout.addWidget(QLabel("Weight:"), 1, 1)
-    obj_layout.addWidget(self.weight_purity_spin, 1, 2)
-    
-    obj_layout.addWidget(self.obj_selectivity_check, 2, 0)
-    obj_layout.addWidget(QLabel("Weight:"), 2, 1)
-    obj_layout.addWidget(self.weight_selectivity_spin, 2, 2)
+    obj_buttons_layout = QHBoxLayout()
     
     apply_obj_btn = QPushButton("Apply Objectives")
     apply_obj_btn.clicked.connect(lambda: update_objectives(self))
-    obj_layout.addWidget(apply_obj_btn, 3, 0, 1, 3)
+    obj_buttons_layout.addWidget(apply_obj_btn)
     
-    right_panel.addWidget(obj_group)
+    objectives_layout.addLayout(obj_buttons_layout)
+    
+    right_panel.addWidget(objectives_group)
     
     layout.addLayout(left_panel, 65)
     layout.addLayout(right_panel, 35)
@@ -301,13 +283,25 @@ def setup_experiment_tab(self):
     self.n_initial_spin.setValue(5)
     
     self.design_method_combo = QComboBox()
-    self.design_method_combo.addItems(["TPE", "Latin Hypercube", "Random", "Sobol"])
+    self.design_method_combo.addItems([
+        "TPE", "GPEI", "Random", "Latin Hypercube", "Sobol", "CMA-ES", "NSGA-II"
+    ])
+    
+    design_method_layout = QHBoxLayout()
+    design_method_layout.addWidget(self.design_method_combo)
+    
+    design_help_btn = QPushButton("?")
+    design_help_btn.setMaximumWidth(30)
+    design_help_btn.setToolTip("Click for information about sampling methods")
+    design_help_btn.clicked.connect(lambda: show_design_method_help(self))
+    design_method_layout.addWidget(design_help_btn)
+    
+    step1_layout.addRow("Number of initial experiments:", self.n_initial_spin)
+    step1_layout.addRow("Design method:", design_method_layout)
     
     self.generate_initial_btn = QPushButton("Generate Initial Experiments")
     self.generate_initial_btn.clicked.connect(lambda: generate_initial_experiments(self))
     
-    step1_layout.addRow("Number of initial experiments:", self.n_initial_spin)
-    step1_layout.addRow("Design method:", self.design_method_combo)
     step1_layout.addRow(self.generate_initial_btn)
     
     workflow_layout.addWidget(step1_group)

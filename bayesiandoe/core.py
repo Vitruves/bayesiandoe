@@ -5,6 +5,7 @@ import optuna
 from typing import Dict, List, Any, Optional
 from optuna.samplers import BaseSampler, TPESampler
 from scipy import stats
+import random
 
 class AppSettings:
     """Global application settings"""
@@ -105,22 +106,27 @@ def _calculate_parameter_distance(params1, params2, parameters):
 class OptunaBayesianExperiment:
     def __init__(self):
         self.parameters = {}
-        self.categorical_mappings = {}
-        self.objectives = ["yield", "purity", "selectivity"]
-        self.objective_weights = {"yield": 1.0, "purity": 1.0, "selectivity": 1.0}
+        self.objectives = []
+        self.objective_weights = {}
+        self.objective_directions = {}
         self.experiments = []
         self.planned_experiments = []
-        self.study: Optional[optuna.Study] = None
-        self.sampler: BaseSampler = TPESampler(seed=42, consider_prior=True, prior_weight=1.0)
+        self.study = None
+        self.acquisition_function = "ei"  # Default to Expected Improvement
+        self.exploitation_weight = 0.5    # Balance between exploration/exploitation
+        self.min_points_in_model = 3      # Minimum experiments before using model
+        self.design_method = "TPE"        # Default design method
         
-        # Advanced settings
-        self.acquisition_function = "ei"  # Options: ei (expected improvement), pi (probability of improvement), ucb (upper confidence bound)
-        self.exploitation_weight = 0.7  # Higher values favor exploitation (0-1)
-        self.use_thompson_sampling = True  # Use Thompson sampling for uncertainty handling
-        self.min_points_in_model = 3  # Minimum points required before using model-based suggestions
-        self.exploration_noise = 0.05  # Noise level for exploration-exploitation balance
+        # Model storage
+        self.model_cache = {}
+        self.best_candidate = None
         
-        self.create_study()
+        # Parameter importance analysis
+        self.parameter_importance = {}
+        
+        # Logging
+        import logging
+        self.log = logging.getLogger("BayesianDOE")
         
     def add_parameter(self, param):
         # Validate parameter before adding
@@ -141,10 +147,6 @@ class OptunaBayesianExperiment:
         # Add parameter to the model
         self.parameters[param.name] = param
         
-        # Update categorical mappings if needed
-        if param.param_type == "categorical" and param.choices:
-            self.categorical_mappings[param.name] = {val: i for i, val in enumerate(param.choices)}
-        
         # Recreate study if it exists
         if self.study:
             self.create_study()
@@ -152,14 +154,15 @@ class OptunaBayesianExperiment:
     def remove_parameter(self, name):
         if name in self.parameters:
             del self.parameters[name]
-            if name in self.categorical_mappings:
-                del self.categorical_mappings[name]
             if self.study:
                 self.create_study()
 
     def create_study(self, sampler: Optional[BaseSampler] = None):
-        if sampler:
-            self.sampler = sampler
+        if not sampler:
+            # Use TPE sampler by default
+            sampler = TPESampler(seed=42)
+        
+        self.sampler = sampler  # Store the sampler
 
         def dummy_objective(trial: optuna.Trial) -> float:
             return 0.0
@@ -167,7 +170,7 @@ class OptunaBayesianExperiment:
         self.study = optuna.create_study(
             study_name="chemical_optimization",
             direction="maximize",
-            sampler=self.sampler,
+            sampler=sampler,
         )
 
     def set_acquisition_function(self, acq_func: str):
@@ -280,211 +283,530 @@ class OptunaBayesianExperiment:
                 print(f"Error creating distribution for parameter {name}: {e}")
         return distributions
 
-    def acquisition_function_ei(self, mean, std, best_value):
-        """Expected Improvement acquisition function"""
-        z = (mean - best_value) / (std + 1e-6)
-        return (mean - best_value) * stats.norm.cdf(z) + std * stats.norm.pdf(z)
+    def acquisition_function_ei(self, mean, std, best_value, xi=0.01):
+        """Expected Improvement acquisition function.
+        
+        Args:
+            mean: Predicted mean
+            std: Predicted standard deviation
+            best_value: Best observed value so far
+            xi: Exploration parameter
+            
+        Returns:
+            Expected improvement value
+        """
+        import scipy.stats as ss
+        
+        if std <= 0.0:
+            return 0.0
+        
+        z = (mean - best_value - xi) / std
+        ei = (mean - best_value - xi) * ss.norm.cdf(z) + std * ss.norm.pdf(z)
+        return max(ei, 0.0)
     
-    def acquisition_function_pi(self, mean, std, best_value):
-        """Probability of Improvement acquisition function"""
-        z = (mean - best_value) / (std + 1e-6)
-        return stats.norm.cdf(z)
+    def acquisition_function_pi(self, mean, std, best_value, xi=0.01):
+        """Probability of Improvement acquisition function.
+        
+        Args:
+            mean: Predicted mean
+            std: Predicted standard deviation
+            best_value: Best observed value so far
+            xi: Exploration parameter
+            
+        Returns:
+            Probability of improvement value
+        """
+        import scipy.stats as ss
+        
+        if std <= 0.0:
+            return 0.0
+        
+        z = (mean - best_value - xi) / std
+        return ss.norm.cdf(z)
         
     def acquisition_function_ucb(self, mean, std, best_value, beta=2.0):
-        """Upper Confidence Bound acquisition function"""
+        """Upper Confidence Bound acquisition function.
+        
+        Args:
+            mean: Predicted mean
+            std: Predicted standard deviation
+            best_value: Best observed value so far (not used)
+            beta: Exploration parameter
+            
+        Returns:
+            UCB value
+        """
         return mean + beta * std
         
     def evaluate_acquisition(self, mean, std, best_value):
-        """Evaluate the selected acquisition function"""
-        if self.acquisition_function == "ei":
-            return self.acquisition_function_ei(mean, std, best_value)
-        elif self.acquisition_function == "pi":
-            return self.acquisition_function_pi(mean, std, best_value)
-        elif self.acquisition_function == "ucb":
-            # Dynamically adjust beta based on exploitation weight
-            beta = 2.0 * (1 - self.exploitation_weight)
-            return self.acquisition_function_ucb(mean, std, best_value, beta)
+        """Evaluate the acquisition function based on current settings.
+        
+        Args:
+            mean: Predicted mean
+            std: Predicted standard deviation
+            best_value: Best observed value so far
+            
+        Returns:
+            Acquisition function value
+        """
+        acq_func = self.acquisition_function
+        
+        # Scale the exploration weight based on slider
+        exploration_factor = 1.0 - self.exploitation_weight
+        
+        if acq_func == "ei":
+            return self.acquisition_function_ei(mean, std, best_value, xi=0.01*exploration_factor)
+        elif acq_func == "pi":
+            return self.acquisition_function_pi(mean, std, best_value, xi=0.01*exploration_factor)
+        elif acq_func == "ucb":
+            return self.acquisition_function_ucb(mean, std, best_value, beta=exploration_factor*3.0)
         else:
-            # Default to expected improvement
-            return self.acquisition_function_ei(mean, std, best_value)
+            # Default to EI
+            return self.acquisition_function_ei(mean, std, best_value, xi=0.01*exploration_factor)
             
     def _apply_thompson_sampling(self, candidates):
-        """Apply Thompson sampling to candidate selection for increased exploration"""
-        if not self.use_thompson_sampling or len(candidates) < 2:
-            return candidates
-            
-        # Add random noise to scores for Thompson sampling
-        for candidate in candidates:
-            # Scale noise based on confidence (less noise for more confident predictions)
-            if 'std' in candidate:
-                noise_scale = candidate['std'] * self.exploration_noise
-            else:
-                noise_scale = self.exploration_noise
+        """Apply Thompson sampling to select candidates, with fixed key naming."""
+        import numpy as np
+        from scipy.special import softmax
+        
+        # Sort candidates by acquisition value (using the new key name)
+        candidates = sorted(candidates, key=lambda x: x.get('acquisition_value', x.get('acq_value', 0.0)), reverse=True)
+        
+        # Apply softmax to acquisition values for probability distribution
+        acq_values = np.array([c.get('acquisition_value', c.get('acq_value', 0.0)) for c in candidates])
+        
+        # Handle potential instability in softmax
+        acq_values = acq_values - np.max(acq_values)  # For numerical stability
+        
+        # If all values are the same or very close
+        if np.std(acq_values) < 1e-10:
+            probs = np.ones_like(acq_values) / len(acq_values)
+        else:
+            # Apply temperature parameter (lower = more exploitation)
+            temperature = max(0.1, self.exploitation_weight)
+            probs = softmax(acq_values / temperature)
+        
+        # Get cumulative probabilities
+        cumprobs = np.cumsum(probs)
+        
+        # Sample based on probabilities
+        selected = []
+        selected_indices = set()
+        
+        while len(selected) < min(len(candidates), len(candidates) // 3 + 2):
+            r = np.random.random()
+            for i, cp in enumerate(cumprobs):
+                if r <= cp and i not in selected_indices:
+                    selected.append(candidates[i])
+                    selected_indices.add(i)
+                    break
                 
-            noise = np.random.normal(0, noise_scale)
-            if 'acquisition_value' in candidate:
-                candidate['acquisition_value'] += noise
-                
-        # Resort candidates with Thompson sampling noise
-        candidates.sort(key=lambda x: x.get('acquisition_value', 0), reverse=True)
-        return candidates
+        # Always include top candidate for pure exploitation
+        if 0 not in selected_indices and candidates:
+            selected.insert(0, candidates[0])
+        
+        return selected
 
-    def suggest_experiments(self, n_suggestions=5) -> List[Dict[str, Any]]:
-        if not self.parameters or not self.study:
-            print("Warning: Cannot suggest experiments without parameters or study.")
-            return []
-            
-        # Verify all parameters have valid distributions
-        invalid_params = []
-        for name, param in self.parameters.items():
-            if param.param_type == "categorical" and (not param.choices or len(param.choices) == 0):
-                invalid_params.append(name)
-            elif param.param_type in ["continuous", "discrete"] and (param.low is None or param.high is None or param.low >= param.high):
-                invalid_params.append(name)
-                
-        if invalid_params:
-            error_msg = f"Invalid parameter state for: {', '.join(invalid_params)}"
-            print(f"Error: {error_msg}")
-            raise ValueError(error_msg)
-            
-        # Calculate number of points to acquire using Optuna and number to generate randomly
-        n_optuna = n_suggestions
-        n_random = 0
-        
-        # For very early stage optimization, use more random points to explore
-        if len(self.experiments) < self.min_points_in_model:
-            n_optuna = min(len(self.experiments), n_suggestions)
-            n_random = n_suggestions - n_optuna
-            
-        suggestions = []
-        distributions = self._get_distributions()
-        
-        # First, get Optuna suggestions
-        if n_optuna > 0:
-            try:
-                for _ in range(n_optuna):
-                    trial = self.study.ask(fixed_distributions=distributions)
-                    suggestions.append(trial.params.copy())
-            except Exception as e:
-                print(f"Error during Optuna suggestion: {e}")
-                n_random = n_suggestions  # Fall back to random sampling
-                suggestions = []
-        
-        # Add random suggestions for exploration if needed
-        for _ in range(n_random):
-            params = {}
-            try:
-                for name, param in self.parameters.items():
-                    params[name] = param.suggest_value()
-                suggestions.append(params)
-            except Exception as e:
-                print(f"Error during random suggestion: {e}")
-        
-        # If we have a Gaussian Process model with enough data, use it for better suggestions
-        if len(self.experiments) >= self.min_points_in_model and n_random == 0:
-            try:
-                # Try to generate more candidates and select the best subset using acquisition function
-                from sklearn.gaussian_process import GaussianProcessRegressor
-                from sklearn.gaussian_process.kernels import Matern
-                
-                # Extract normalized features and targets
-                X, y = self._extract_normalized_features_and_targets()
-                if len(X) > 0:
-                    # Define and fit Gaussian Process
-                    kernel = Matern(nu=2.5)
-                    gp = GaussianProcessRegressor(kernel=kernel, normalize_y=True, n_restarts_optimizer=5)
-                    gp.fit(X, y)
-                    
-                    # Generate additional candidates
-                    candidate_suggestions = suggestions.copy()  # Keep Optuna suggestions
-                    n_extra_candidates = min(n_suggestions * 10, 100)  # Generate 10x or up to 100 candidates
-                    
-                    # Generate random candidates for evaluation
-                    for _ in range(n_extra_candidates):
-                        params = {}
-                        for name, param in self.parameters.items():
-                            params[name] = param.suggest_value()
-                        candidate_suggestions.append(params)
-                    
-                    # Evaluate all candidates
-                    evaluated_candidates = []
-                    best_value = max([exp.get('score', 0) for exp in self.experiments]) if self.experiments else 0
-                    
-                    for params in candidate_suggestions:
-                        features = self._normalize_params(params)
-                        X_test = np.array(features).reshape(1, -1)
-                        mean, std = gp.predict(X_test, return_std=True)
-                        mean, std = float(mean[0]), float(std[0])
-                        
-                        acq_value = self.evaluate_acquisition(mean, std, best_value)
-                        
-                        evaluated_candidates.append({
-                            'params': params,
-                            'mean': mean,
-                            'std': std,
-                            'acquisition_value': acq_value
-                        })
-                    
-                    # Apply Thompson sampling for diversity
-                    evaluated_candidates = self._apply_thompson_sampling(evaluated_candidates)
-                    
-                    # Select top candidates
-                    top_candidates = evaluated_candidates[:n_suggestions]
-                    
-                    # Replace suggestions with top candidates
-                    suggestions = [candidate['params'] for candidate in top_candidates]
-                
-            except Exception as e:
-                print(f"Error during advanced suggestion generation: {e}")
-                # Keep original suggestions if advanced method fails
-                
-        # Ensure we have exactly n_suggestions
-        if len(suggestions) > n_suggestions:
-            suggestions = suggestions[:n_suggestions]
-        elif len(suggestions) < n_suggestions:
-            # Fill with random suggestions if needed
-            for _ in range(n_suggestions - len(suggestions)):
-                params = {}
-                for name, param in self.parameters.items():
-                    params[name] = param.suggest_value()
-                suggestions.append(params)
-                
-        return suggestions
-    
     def _normalize_params(self, params):
-        """Normalize parameters to [0,1] range for the Gaussian Process"""
+        """Convert parameter values to normalized feature vector for machine learning models"""
         features = []
         
         for name, param in self.parameters.items():
             if name in params:
                 value = params[name]
                 
-                if param.param_type == "categorical":
-                    # One-hot encoding
-                    for i, choice in enumerate(param.choices):
+                if param.param_type == "continuous" or param.param_type == "discrete":
+                    # Normalize numeric parameters to [0, 1]
+                    if param.high > param.low:
+                        norm_value = (float(value) - param.low) / (param.high - param.low)
+                        features.append(norm_value)
+                    else:
+                        features.append(0.5)  # Default if range is invalid
+                elif param.param_type == "categorical":
+                    # One-hot encode categorical parameters
+                    choices = param.choices
+                    for choice in choices:
                         features.append(1.0 if value == choice else 0.0)
-                elif param.param_type in ["continuous", "discrete"]:
-                    # Normalize to [0,1]
-                    norm_value = (float(value) - param.low) / (param.high - param.low)
-                    features.append(norm_value)
-                    
+                else:
+                    features.append(0.0)  # Default for unknown types
+            else:
+                # Add default features if parameter is missing
+                if param.param_type == "continuous" or param.param_type == "discrete":
+                    features.append(0.5)  # Default to middle of range
+                elif param.param_type == "categorical":
+                    # One-hot encode with all zeros
+                    features.extend([0.0] * len(param.choices))
+        
         return features
     
     def _extract_normalized_features_and_targets(self):
-        """Extract normalized features and targets from experiments"""
+        """Extract normalized features and target values for model training"""
         if not self.experiments:
-            return np.array([]), np.array([])
+            return [], []
             
         X = []
         y = []
         
         for exp in self.experiments:
-            if 'params' in exp and 'score' in exp:
+            if 'params' in exp:
+                # Normalize parameters
                 features = self._normalize_params(exp['params'])
                 X.append(features)
-                y.append(exp['score'])
+                
+                # Calculate composite score as target
+                score = 0.0
+                weight_sum = 0.0
+                
+                for obj in self.objectives:
+                    if obj in exp.get('results', {}):
+                        weight = self.objective_weights.get(obj, 1.0)
+                        score += exp['results'][obj] * weight
+                        weight_sum += weight
+                
+                if weight_sum > 0:
+                    score = score / weight_sum
+                    
+                y.append(score)
                 
         return np.array(X), np.array(y)
+    
+    def _get_experiment_analysis(self):
+        """Analyze current experiment set to guide future suggestions"""
+        if not self.experiments or len(self.experiments) < 3:
+            return {
+                'best_score': 0.0,
+                'parameter_importance': {},
+                'exploration_recommended': True,
+                'convergence_status': 'not_started',
+                'estimated_rounds_to_convergence': float('inf')
+            }
+            
+        # Calculate the best score so far
+        best_score = 0.0
+        for exp in self.experiments:
+            score = 0.0
+            weight_sum = 0.0
+            
+            for obj in self.objectives:
+                if obj in exp.get('results', {}):
+                    weight = self.objective_weights.get(obj, 1.0)
+                    score += exp['results'][obj] * weight
+                    weight_sum += weight
+            
+            if weight_sum > 0:
+                score = score / weight_sum
+                best_score = max(best_score, score)
+        
+        # Calculate parameter importance
+        try:
+            param_importance = self.analyze_parameter_importance()
+        except:
+            param_importance = {name: 1.0/len(self.parameters) for name in self.parameters}
+            
+        # Analyze convergence
+        scores = []
+        for exp in self.experiments:
+            score = 0.0
+            weight_sum = 0.0
+            
+            for obj in self.objectives:
+                if obj in exp.get('results', {}):
+                    weight = self.objective_weights.get(obj, 1.0)
+                    score += exp['results'][obj] * weight
+                    weight_sum += weight
+            
+            if weight_sum > 0:
+                score = score / weight_sum
+                
+            scores.append(score)
+            
+        best_scores = np.maximum.accumulate(scores)
+        
+        # Check if scores are improving
+        improvement_threshold = 0.01  # 1% improvement
+        
+        # Check last few experiments for improvement
+        check_window = min(5, len(best_scores) // 3)
+        if check_window > 1:
+            recent_improvement = best_scores[-1] - best_scores[-check_window]
+            relative_improvement = recent_improvement / (best_scores[-check_window] + 1e-10)
+            
+            if relative_improvement < improvement_threshold:
+                convergence_status = 'converging' 
+                exploration_recommended = True
+            else:
+                convergence_status = 'improving'
+                exploration_recommended = False
+        else:
+            convergence_status = 'started'
+            exploration_recommended = True
+            
+        # Estimate rounds to convergence using convergence model
+        try:
+            from scipy.optimize import curve_fit
+            
+            def convergence_model(x, a, b, c):
+                return a * (1 - np.exp(-b * x)) + c
+                
+            x = np.array(range(1, len(best_scores) + 1))
+            
+            if len(x) >= 3:  # Need at least 3 points for fitting
+                popt, _ = curve_fit(
+                    convergence_model, x, best_scores, 
+                    p0=[0.5, 0.1, best_scores[0]],
+                    bounds=([0, 0.001, 0], [1, 1, 1]),
+                    maxfev=10000
+                )
+                
+                a, b, c = popt
+                
+                # Calculate target (95% of asymptotic value)
+                asymptotic_value = a + c
+                target = 0.95 * asymptotic_value
+                
+                # Calculate required iterations
+                if a > 0 and target > best_scores[-1]:
+                    from math import log
+                    required_x = -log(1 - (target - c) / a) / b
+                    remaining_rounds = max(0, int(np.ceil(required_x - len(best_scores))))
+                else:
+                    remaining_rounds = 0
+                    
+                estimated_rounds = remaining_rounds
+            else:
+                estimated_rounds = float('inf')
+        except:
+            estimated_rounds = float('inf')
+            
+        return {
+            'best_score': best_score,
+            'parameter_importance': param_importance,
+            'exploration_recommended': exploration_recommended,
+            'convergence_status': convergence_status,
+            'estimated_rounds_to_convergence': estimated_rounds
+        }
+        
+    def suggest_experiments(self, n_suggestions=5) -> List[Dict[str, Any]]:
+        """Generate new experiment suggestions using the selected Bayesian optimization method."""
+        self.log.info(f"Suggesting {n_suggestions} new experiments using {self.design_method}")
+        
+        # If we don't have any parameters defined, raise an error
+        if not self.parameters:
+            raise ValueError("No parameters defined. Add parameters before generating experiments.")
+        
+        # Create the optuna study for sampling if it doesn't exist
+        if self.study is None:
+            self.create_study()
+        
+        # Get experiment analysis to guide suggestion strategy
+        analysis = self._get_experiment_analysis()
+        
+        # Select sampling function based on design method and experiment analysis
+        design_method = self.design_method.upper()
+        
+        suggestions = []
+        
+        try:
+            # For initial experiments (less than min_points_in_model)
+            if not self.experiments or len(self.experiments) < self.min_points_in_model:
+                # For the initial design, focus on exploration
+                if design_method in ["SOBOL", "LATIN HYPERCUBE"]:
+                    # Use the selected space-filling design
+                    self.log.info(f"Using {design_method} for initial space exploration")
+                    if design_method == "SOBOL":
+                        suggestions = self._suggest_with_sobol(n_suggestions)
+                    else:  # Latin Hypercube
+                        suggestions = self._suggest_with_lhs(n_suggestions)
+                else:
+                    # For all other methods in initial phase, use prior knowledge first
+                    # then space-filling designs
+                    suggestions = self._suggest_with_prior_and_space_filling(n_suggestions)
+            else:
+                # For later experiments, use the selected method
+                if design_method == "TPE":
+                    suggestions = self._suggest_with_tpe(n_suggestions)
+                elif design_method == "GPEI":
+                    suggestions = self._suggest_with_gp(n_suggestions)
+                elif design_method == "CMA-ES":
+                    suggestions = self._suggest_with_cmaes(n_suggestions)
+                elif design_method == "NSGA-II":
+                    suggestions = self._suggest_with_nsga2(n_suggestions)
+                elif design_method == "SOBOL":
+                    suggestions = self._suggest_with_sobol(n_suggestions)
+                elif design_method == "LATIN HYPERCUBE":
+                    suggestions = self._suggest_with_lhs(n_suggestions)
+                elif design_method == "RANDOM":
+                    suggestions = self._suggest_random(n_suggestions)
+                else:
+                    # Default to TPE if unknown method
+                    self.log.warning(f"Unknown design method: {design_method}. Using TPE.")
+                    suggestions = self._suggest_with_tpe(n_suggestions)
+            
+            # Ensure diversity in suggestions to prevent clustering
+            if len(suggestions) > n_suggestions:
+                # Calculate diversity weight based on convergence status
+                if analysis['convergence_status'] == 'converging':
+                    # Increase diversity when converging to explore more
+                    diversity_weight = 0.8
+                else:
+                    # Balance between diversity and performance
+                    diversity_weight = 0.6
+                    
+                suggestions = self.select_diverse_subset(suggestions, n_suggestions, diversity_weight)
+        except Exception as e:
+            self.log.error(f"Error during suggestion generation: {e}")
+            # Fallback to simple random sampling if any error occurs
+            self.log.warning("Falling back to random sampling due to error")
+            suggestions = []
+        
+        # If we don't have enough suggestions, add random ones
+        while len(suggestions) < n_suggestions:
+            params = {}
+            for name, param in self.parameters.items():
+                params[name] = param.suggest_value()
+            suggestions.append(params)
+        
+        # Add a prediction of the expected yield to help the user
+        try:
+            if len(self.experiments) >= 3:
+                X, y = self._extract_normalized_features_and_targets()
+                
+                for i, params in enumerate(suggestions):
+                    x = self._normalize_params(params)
+                    
+                    # Use a simple model to predict
+                    from sklearn.ensemble import RandomForestRegressor
+                    model = RandomForestRegressor(n_estimators=50, random_state=42)
+                    model.fit(X, y)
+                    
+                    pred = model.predict([x])[0]
+                    # Store prediction in suggestion
+                    suggestions[i] = dict(params)  # Make a copy
+                    suggestions[i]['_predicted_yield'] = pred * 100  # As percentage
+        except:
+            # Just continue if prediction fails
+            pass
+        
+        return suggestions[:n_suggestions]
+    
+    def _suggest_with_prior_and_space_filling(self, n_suggestions):
+        """Generate suggestions using prior knowledge and space-filling designs"""
+        has_prior = any(p.prior_mean is not None for p in self.parameters.values()
+                       if p.param_type in ["continuous", "discrete"])
+        
+        if has_prior:
+            # Generate some suggestions based on prior knowledge
+            prior_based = []
+            for _ in range(n_suggestions // 2 + 1):
+                params = {}
+                for name, param in self.parameters.items():
+                    if param.param_type in ["continuous", "discrete"] and param.prior_mean is not None:
+                        # Sample from a distribution around the prior mean
+                        if param.param_type == "continuous":
+                            value = random.normalvariate(param.prior_mean, param.prior_std / 2)
+                            value = max(param.low, min(param.high, value))
+                        else:  # discrete
+                            value = int(round(random.normalvariate(param.prior_mean, param.prior_std / 2)))
+                            value = max(int(param.low), min(int(param.high), value))
+                    else:
+                        value = param.suggest_value()
+                    params[name] = value
+                prior_based.append(params)
+            
+            # Fill remaining with space-filling design
+            remaining = n_suggestions - len(prior_based)
+            space_filling = self._suggest_with_sobol(remaining)
+            
+            return prior_based + space_filling
+        else:
+            # No prior knowledge, use space-filling design
+            return self._suggest_with_sobol(n_suggestions)
+
+    def _train_surrogate_model(self, X, y, model_type='rf'):
+        """Train a surrogate model for Bayesian optimization"""
+        try:
+            if model_type == 'rf':
+                from sklearn.ensemble import RandomForestRegressor
+                model = RandomForestRegressor(
+                    n_estimators=100, 
+                    min_samples_leaf=3,
+                    random_state=42
+                )
+            elif model_type == 'gp':
+                from sklearn.gaussian_process import GaussianProcessRegressor
+                from sklearn.gaussian_process.kernels import Matern, ConstantKernel
+                
+                kernel = ConstantKernel(1.0) * Matern(length_scale=1.0, nu=2.5)
+                model = GaussianProcessRegressor(
+                    kernel=kernel,
+                    alpha=0.05,
+                    normalize_y=True,
+                    random_state=42
+                )
+            else:
+                # Default to random forest
+                from sklearn.ensemble import RandomForestRegressor
+                model = RandomForestRegressor(
+                    n_estimators=100, 
+                    min_samples_leaf=3,
+                    random_state=42
+                )
+                
+            model.fit(X, y)
+            return model
+        except Exception as e:
+            self.log.warning(f"Error training surrogate model: {e}")
+            return None
+
+    def _predict_candidate(self, params, X, y, model_type='rf'):
+        """Predict mean and std for a candidate using the surrogate model"""
+        # Normalize the parameters
+        x = self._normalize_params(params)
+        
+        # Make prediction with uncertainty
+        try:
+            if model_type == 'gp':
+                # GP provides uncertainty directly
+                from sklearn.gaussian_process import GaussianProcessRegressor
+                from sklearn.gaussian_process.kernels import Matern, ConstantKernel
+                
+                if not hasattr(self, '_gp_model') or self._gp_model is None:
+                    kernel = ConstantKernel(1.0) * Matern(length_scale=1.0, nu=2.5)
+                    self._gp_model = GaussianProcessRegressor(
+                        kernel=kernel,
+                        alpha=0.05,
+                        normalize_y=True,
+                        random_state=42
+                    )
+                    self._gp_model.fit(X, y)
+                
+                mean, std = self._gp_model.predict([x], return_std=True)
+                return float(mean[0]), float(std[0])
+                
+            else:
+                # For RF, use variance of tree predictions as uncertainty
+                from sklearn.ensemble import RandomForestRegressor
+                
+                if not hasattr(self, '_rf_model') or self._rf_model is None:
+                    self._rf_model = RandomForestRegressor(
+                        n_estimators=100, 
+                        min_samples_leaf=3,
+                        random_state=42
+                    )
+                    self._rf_model.fit(X, y)
+                
+                # Predict with each tree
+                preds = []
+                for tree in self._rf_model.estimators_:
+                    preds.append(tree.predict([x])[0])
+                
+                mean = np.mean(preds)
+                std = np.std(preds)
+                
+                return float(mean), float(std)
+        except Exception as e:
+            self.log.warning(f"Error in prediction: {e}")
+            return 0.5, 0.5  # Default values
         
     def get_best_experiments(self, n=5) -> List[Dict[str, Any]]:
         """Get the best experiments sorted by score"""
@@ -512,17 +834,19 @@ class OptunaBayesianExperiment:
         with open(filepath, 'wb') as f:
             pickle.dump({
                 'parameters': self.parameters,
-                'categorical_mappings': self.categorical_mappings,
                 'objectives': self.objectives,
                 'objective_weights': self.objective_weights,
+                'objective_directions': self.objective_directions,
                 'experiments': self.experiments,
-                'planned_experiments': self.planned_experiments,
-                'optuna_trials': trials_data,
+                'study': self.study,
                 'acquisition_function': self.acquisition_function,
                 'exploitation_weight': self.exploitation_weight,
-                'use_thompson_sampling': self.use_thompson_sampling,
                 'min_points_in_model': self.min_points_in_model,
-                'exploration_noise': self.exploration_noise
+                'design_method': self.design_method,
+                'model_cache': self.model_cache,
+                'best_candidate': self.best_candidate,
+                'parameter_importance': self.parameter_importance,
+                'optuna_trials': trials_data
             }, f)
             
     def load_model(self, filepath):
@@ -530,19 +854,19 @@ class OptunaBayesianExperiment:
         with open(filepath, 'rb') as f:
             data = pickle.load(f)
             self.parameters = data['parameters']
-            self.categorical_mappings = data['categorical_mappings']
             self.objectives = data['objectives']
             self.objective_weights = data['objective_weights']
+            self.objective_directions = data['objective_directions']
             self.experiments = data.get('experiments', [])
-            self.planned_experiments = data.get('planned_experiments', [])
-            optuna_trials_data = data.get('optuna_trials', [])
-            
-            # Load advanced settings if they exist
+            self.study = data.get('study')
             self.acquisition_function = data.get('acquisition_function', self.acquisition_function)
             self.exploitation_weight = data.get('exploitation_weight', self.exploitation_weight)
-            self.use_thompson_sampling = data.get('use_thompson_sampling', self.use_thompson_sampling)
             self.min_points_in_model = data.get('min_points_in_model', self.min_points_in_model)
-            self.exploration_noise = data.get('exploration_noise', self.exploration_noise)
+            self.design_method = data.get('design_method', self.design_method)
+            self.model_cache = data.get('model_cache', {})
+            self.best_candidate = data.get('best_candidate')
+            self.parameter_importance = data.get('parameter_importance', {})
+            optuna_trials_data = data.get('optuna_trials', [])
 
         self.create_study()
 
@@ -628,35 +952,243 @@ class OptunaBayesianExperiment:
         return np.sqrt(distance / count)
 
     def select_diverse_subset(self, candidates, n, diversity_weight=0.7):
-        """Select a diverse subset of candidate experiments."""
+        """Select a diverse subset of candidates to ensure exploration.
+        
+        Args:
+            candidates: List of parameter dictionaries
+            n: Number of candidates to select
+            diversity_weight: Weight of diversity vs. predicted performance
+            
+        Returns:
+            List of selected diverse parameter sets
+        """
         if len(candidates) <= n:
             return candidates
         
-        selected = [candidates[0]]  # Start with first candidate
+        # First, always include the candidate with highest predicted performance
+        if hasattr(self, 'best_candidate') and self.best_candidate is not None:
+            selected = [self.best_candidate]
+            candidates = [c for c in candidates if c != self.best_candidate]
+        else:
+            selected = [candidates[0]]
         candidates = candidates[1:]
         
+        # Then add remaining candidates based on diversity
         while len(selected) < n and candidates:
+            max_min_dist = -1
             best_candidate = None
-            best_score = -float('inf')
+            best_idx = -1
             
-            for candidate in candidates:
-                # Calculate diversity as minimum distance to already selected points
-                min_distance = min(self.calculate_experiment_distance(candidate['params'], s['params']) for s in selected)
+            # For each remaining candidate
+            for i, candidate in enumerate(candidates):
+                # Calculate minimum distance to already selected candidates
+                min_dist = float('inf')
+                for sel in selected:
+                    dist = self.calculate_experiment_distance(candidate, sel)
+                    min_dist = min(min_dist, dist)
                 
-                # Calculate utility based on predicted score
-                utility = candidate.get('predicted_score', 0.5)
+                # Apply diversity weighting
+                score = min_dist * diversity_weight + (1 - diversity_weight) * (1.0 / (i + 1))
                 
-                # Combined score with diversity weight
-                score = (1 - diversity_weight) * utility + diversity_weight * min_distance
-                
-                if score > best_score:
-                    best_score = score
+                if score > max_min_dist:
+                    max_min_dist = score
                     best_candidate = candidate
+                    best_idx = i
             
-            if best_candidate:
+            if best_candidate is not None:
                 selected.append(best_candidate)
-                candidates.remove(best_candidate)
+                candidates.pop(best_idx)
             else:
                 break
             
         return selected
+
+    def _suggest_with_gp(self, n_suggestions):
+        """Generate suggestions using Gaussian Process model with improved hyperparameters"""
+        try:
+            from sklearn.gaussian_process import GaussianProcessRegressor
+            from sklearn.gaussian_process.kernels import Matern, ConstantKernel, RBF
+            import numpy as np
+            
+            # Extract features and targets for model training
+            X, y = self._extract_normalized_features_and_targets()
+            
+            if len(X) < 3 or len(np.unique(y)) < 2:
+                # Not enough data for good GP fitting
+                return self._suggest_with_tpe(n_suggestions)
+            
+            # Use wider bounds for length_scale to avoid convergence warnings
+            kernel = ConstantKernel(1.0) * Matern(
+                length_scale=np.ones(X.shape[1]),
+                length_scale_bounds=(1e-6, 1e6),
+                nu=2.5
+            )
+            
+            # Add noise term to handle potential instability
+            gp = GaussianProcessRegressor(
+                kernel=kernel,
+                alpha=0.01,  # Increased noise level for stability
+                normalize_y=True,
+                n_restarts_optimizer=5
+            )
+            
+            # Train the GP
+            gp.fit(X, y)
+            
+            # Generate and evaluate candidates
+            n_candidates = n_suggestions * 10
+            candidates = []
+            
+            # Get best value so far for acquisition function
+            best_value = max(y) if len(y) > 0 else 0.0
+            
+            for _ in range(n_candidates):
+                # Generate random parameter values
+                params = {}
+                for name, param in self.parameters.items():
+                    params[name] = param.suggest_value()
+                
+                # Normalize the parameters
+                x = self._normalize_params(params)
+                
+                # Predict with GP
+                try:
+                    mean, std = gp.predict([x], return_std=True)
+                    mean, std = float(mean[0]), float(std[0])
+                    
+                    # Use acquisition function for evaluation
+                    acq_value = self.evaluate_acquisition(mean, std, best_value)
+                    
+                    candidates.append({
+                        'params': params,
+                        'mean': mean,
+                        'std': std,
+                        'acquisition_value': acq_value  # Renamed from acq_value to avoid key error
+                    })
+                except Exception as e:
+                    self.log.warning(f"GP prediction error: {e}")
+                    # If prediction fails, just add with default scores
+                    candidates.append({
+                        'params': params,
+                        'mean': 0.5,
+                        'std': 0.5,
+                        'acquisition_value': 0.0
+                    })
+            
+            # Sort by acquisition value and select top candidates
+            candidates.sort(key=lambda x: x['acquisition_value'], reverse=True)
+            return [c['params'] for c in candidates[:n_suggestions]]
+        
+        except Exception as e:
+            self.log.warning(f"GP sampling failed: {e}")
+            # Fall back to TPE if GP fails
+            return self._suggest_with_tpe(n_suggestions)
+
+    def _suggest_with_tpe(self, n_suggestions):
+        """Generate suggestions using Tree-structured Parzen Estimator"""
+        try:
+            # Get distributions for all parameters
+            distributions = self._get_distributions()
+            
+            # Generate initial candidates
+            candidates = []
+            for _ in range(n_suggestions * 5):
+                trial = self.study.ask(distributions)
+                params = {}
+                for name, param in self.parameters.items():
+                    params[name] = trial._params.get(name)
+                candidates.append({'params': params, 'trial': trial})
+                
+            # Finalize suggestions
+            results = []
+            for i in range(min(n_suggestions, len(candidates))):
+                self.study.tell(candidates[i]['trial'], 0.0)  # Dummy value
+                results.append(candidates[i]['params'])
+                
+            return results
+        except Exception as e:
+            self.log.warning(f"TPE sampling failed: {e}")
+            # Fall back to random sampling
+            return self._suggest_random(n_suggestions)
+
+    def _suggest_with_sobol(self, n_suggestions):
+        """Generate suggestions using Sobol sequence (space-filling)"""
+        try:
+            from scipy.stats import qmc
+            import numpy as np
+            
+            # Create Sobol sequence generator
+            sampler = qmc.Sobol(d=len(self.parameters), scramble=True)
+            
+            # Generate samples in [0, 1]^d space
+            sample = sampler.random(n=n_suggestions)
+            
+            # Transform to actual parameter ranges
+            candidates = []
+            for s in sample:
+                params = {}
+                for i, (name, param) in enumerate(self.parameters.items()):
+                    if param.param_type == "continuous":
+                        value = param.low + s[i] * (param.high - param.low)
+                    elif param.param_type == "discrete":
+                        value = int(round(param.low + s[i] * (param.high - param.low)))
+                    else:  # categorical
+                        idx = int(s[i] * len(param.choices))
+                        if idx >= len(param.choices):
+                            idx = len(param.choices) - 1
+                        value = param.choices[idx]
+                    params[name] = value
+                candidates.append(params)
+            
+            return candidates
+        
+        except ImportError:
+            # Fall back to random if scipy is not available
+            self.log.warning("scipy.stats.qmc not available, falling back to random")
+            return self._suggest_random(n_suggestions)
+
+    def _suggest_with_lhs(self, n_suggestions):
+        """Generate suggestions using Latin Hypercube Sampling"""
+        try:
+            from scipy.stats import qmc
+            import numpy as np
+            
+            # Create Latin hypercube sampler
+            sampler = qmc.LatinHypercube(d=len(self.parameters))
+            
+            # Generate samples in [0, 1]^d space
+            sample = sampler.random(n=n_suggestions)
+            
+            # Transform to actual parameter ranges
+            candidates = []
+            for s in sample:
+                params = {}
+                for i, (name, param) in enumerate(self.parameters.items()):
+                    if param.param_type == "continuous":
+                        value = param.low + s[i] * (param.high - param.low)
+                    elif param.param_type == "discrete":
+                        value = int(round(param.low + s[i] * (param.high - param.low)))
+                    else:  # categorical
+                        idx = int(s[i] * len(param.choices))
+                        if idx >= len(param.choices):
+                            idx = len(param.choices) - 1
+                        value = param.choices[idx]
+                    params[name] = value
+                candidates.append(params)
+            
+            return candidates
+        
+        except ImportError:
+            # Fall back to random if scipy is not available
+            self.log.warning("scipy.stats.qmc not available, falling back to random")
+            return self._suggest_random(n_suggestions)
+
+    def _suggest_random(self, n_suggestions):
+        """Generate suggestions using pure random sampling"""
+        candidates = []
+        for _ in range(n_suggestions):
+            params = {}
+            for name, param in self.parameters.items():
+                params[name] = param.suggest_value()
+            candidates.append(params)
+        return candidates

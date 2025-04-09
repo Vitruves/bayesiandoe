@@ -33,6 +33,12 @@ class ChemicalParameter:
             self.prior_std = None
         
     def suggest_value(self):
+        """Generate a parameter value based on parameter type and prior knowledge.
+        
+        Returns:
+            Generated parameter value based on prior information if available,
+            otherwise using parameter ranges or choices.
+        """
         if self.param_type == "continuous" or self.param_type == "discrete":
             return self.suggest_numeric_value()
         elif self.param_type == "categorical":
@@ -40,44 +46,93 @@ class ChemicalParameter:
         return None
         
     def suggest_categorical_value(self):
+        """Generate a categorical parameter value using preference weights if available.
+        
+        Returns:
+            Selected category from available choices based on preferences.
+        """
         if not self.choices:
             return None
+        
+        # If we have categorical preferences defined, use them
         if hasattr(self, 'categorical_preferences') and self.categorical_preferences:
-            total_weight = sum(self.categorical_preferences.values())
+            # Calculate sum of all weights
+            total_weight = 0
+            weights = []
+            
+            for choice in self.choices:
+                weight = self.categorical_preferences.get(choice, 1.0)
+                weights.append(weight)
+                total_weight += weight
+            
+            # Normalize weights
             if total_weight > 0:
-                weights = [self.categorical_preferences.get(choice, 1) / total_weight for choice in self.choices]
+                weights = [w / total_weight for w in weights]
+                
                 try:
+                    # Use weighted random choice
                     return random.choices(self.choices, weights=weights, k=1)[0]
-                except ValueError:
+                except (ValueError, ImportError):
                     pass
+                
+        # Fallback to simple random choice
         return random.choice(self.choices)
 
     def suggest_numeric_value(self):
+        """Generate a numeric parameter value using prior information if available.
+        
+        Returns:
+            Generated value from truncated normal distribution or uniform range.
+        """
         value = None
         
+        # If we have prior information, use it to inform the search
         if self.prior_mean is not None and self.prior_std is not None and self.prior_std > 0:
             try:
+                from scipy import stats
+                
+                # Calculate truncated normal parameters
                 a = (self.low - self.prior_mean) / self.prior_std
                 b = (self.high - self.prior_mean) / self.prior_std
+                
+                # Sample from truncated normal distribution
                 value = stats.truncnorm.rvs(a, b, loc=self.prior_mean, scale=self.prior_std, size=1)[0]
             except ImportError:
-                pass
+                # Fallback without scipy
+                import random
+                import math
+                
+                # Approximate truncated normal with rejection sampling
+                while value is None or value < self.low or value > self.high:
+                    # Box-Muller transform for normal distribution
+                    u1 = random.random()
+                    u2 = random.random()
+                    z0 = math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+                    
+                    # Scale and shift
+                    value = z0 * self.prior_std + self.prior_mean
+                    
+                    # Limit rejection attempts
+                    if random.random() < 0.05:  # 5% chance to give up and use uniform
+                        break
             except Exception as e:
                 print(f"Error in suggest_numeric_value: {e}")
-                pass
+                value = None
         
-        if value is None:
+        # Fallback to uniform sampling
+        if value is None or value < self.low or value > self.high:
+            import random
             if self.param_type == "continuous":
                 value = random.uniform(self.low, self.high)
             elif self.param_type == "discrete":
                 value = random.randint(int(self.low), int(self.high))
             else:
                 return None
-                
-        # Apply rounding if it's a continuous parameter
+        
+        # Apply rounding if needed
         if self.param_type == "continuous" and settings.auto_round:
             value = settings.apply_rounding(value)
         elif self.param_type == "discrete":
             value = int(round(value))
-            
+        
         return value

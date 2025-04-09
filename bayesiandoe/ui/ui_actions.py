@@ -491,66 +491,73 @@ def add_substrate_parameter(self):
         log(self, f"-- Substrate '{substrate_name.strip()}' added - Success")
 
 def generate_initial_experiments(self):
-    if not self.model.parameters:
-        QMessageBox.warning(self, "Warning", "Define parameters first before generating experiments.")
-        return
-        
-    n_exps = self.n_initial_spin.value()
-    method = self.design_method_combo.currentText()
-    
-    self.model.planned_experiments = []
-    self.round_start_indices = [0]
-    self.current_round = 1
-    
     try:
-        experiments = self.model.suggest_experiments(n_suggestions=n_exps)
-        self.model.planned_experiments.extend(experiments)
+        n_experiments = self.n_initial_spin.value()
         
-        self.experiment_table.update_columns(self.model)
-        self.experiment_table.update_from_planned(self.model, self.round_start_indices)
-        self.current_round_label.setText(str(self.current_round))
-        self.results_count_label.setText(f"0 / {n_exps}")
-        self.total_exp_label.setText(str(len(self.model.planned_experiments)))
+        if not self.model.parameters:
+            self.log("-- No parameters defined. Add parameters first - Error")
+            return
+            
+        if not self.model.objectives:
+            self.log("-- No objectives defined. Define objectives first - Error")
+            return
+            
+        # Generate suggestions
+        suggestions = self.model.suggest_experiments(n_experiments)
         
-        log(self, f"-- Generated {n_exps} initial experiments using {method} - Success")
+        # Store suggestions as planned experiments
+        self.model.planned_experiments = suggestions
+        
+        # Mark the start of this round
+        self.round_start_indices = [0]
+        self.current_round = 1
+        
+        # Update the UI
+        update_ui_from_model(self)
+        
+        self.log(f"-- Generated {n_experiments} initial experiments - Success")
         
     except Exception as e:
-        QMessageBox.critical(self, "Error", f"Failed to generate experiments: {str(e)}")
-        log(self, f"-- Failed to generate experiments: {str(e)} - Error")
+        self.log(f"-- Failed to generate experiments: {str(e)} - Error")
 
 def generate_next_experiments(self):
-    if not self.model.parameters:
-        QMessageBox.warning(self, "Warning", "Define parameters first before generating experiments.")
-        return
-        
-    if not self.model.experiments:
-        QMessageBox.warning(self, "Warning", "Add results for initial experiments before generating next round.")
-        return
-        
-    n_exps = self.n_next_spin.value()
-    exploit_weight = self.exploit_slider.value() / 100.0
-    
-    self.model.exploitation_weight = exploit_weight
-    
     try:
-        experiments = self.model.suggest_experiments(n_suggestions=n_exps)
+        # Get number of experiments to generate
+        n_experiments = self.n_next_spin.value()
         
+        if not self.model.parameters:
+            self.log("-- No parameters defined. Add parameters first - Error")
+            return
+            
+        if not self.model.objectives:
+            self.log("-- No objectives defined. Define objectives first - Error")
+            return
+            
+        if not self.model.experiments:
+            self.log("-- No experiment results yet. Enter results first - Error")
+            return
+            
+        # Generate suggestions
+        suggestions = self.model.suggest_experiments(n_experiments)
+        
+        # Add to planned experiments
+        if not hasattr(self.model, 'planned_experiments'):
+            self.model.planned_experiments = []
+            
+        # Store the start index for this round
         self.round_start_indices.append(len(self.model.planned_experiments))
-        self.model.planned_experiments.extend(experiments)
+        
+        # Add new experiments
+        self.model.planned_experiments.extend(suggestions)
         self.current_round += 1
         
-        self.experiment_table.update_from_planned(self.model, self.round_start_indices)
-        self.current_round_label.setText(str(self.current_round))
+        # Update the UI
+        update_ui_from_model(self)
         
-        completed = len(self.model.experiments)
-        self.results_count_label.setText(f"{completed} / {n_exps}")
-        self.total_exp_label.setText(str(len(self.model.planned_experiments)))
-        
-        log(self, f"-- Generated {n_exps} next experiments - Success")
+        self.log(f"-- Generated {n_experiments} next experiments - Success")
         
     except Exception as e:
-        QMessageBox.critical(self, "Error", f"Failed to generate next experiments: {str(e)}")
-        log(self, f"-- Failed to generate next experiments: {str(e)} - Error")
+        self.log(f"-- Failed to generate experiments: {str(e)} - Error")
 
 def add_result_for_selected(self):
     selected_items = self.experiment_table.selectedItems()

@@ -331,104 +331,222 @@ def plot_response_surface(model, obj, x_param, y_param, ax=None):
     return ax
 
 def plot_convergence(model, ax=None):
+    """Plot the convergence of optimization over experiments with improved analysis.
+    
+    Shows:
+    - Individual experiment scores
+    - Best score so far
+    - Projected convergence curve
+    - Estimated asymptotic performance
+    - Confidence regions for predictions
+    - Parameter importance inset
+    """
     if ax is None:
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(10, 7))
     
     if not model.experiments:
         ax.text(0.5, 0.5, "No experiment results yet", 
                ha='center', va='center', transform=ax.transAxes)
         return ax
         
+    # Calculate scores for each experiment
     scores = []
     
     for exp in model.experiments:
         score = 0
         weight_sum = 0
         for obj in model.objectives:
-            if obj in exp and exp[obj] is not None:
+            if obj in exp.get('results', {}) and exp['results'][obj] is not None:
                 weight = model.objective_weights.get(obj, 1.0)
-                score += exp[obj] * weight
+                score += exp['results'][obj] * weight
                 weight_sum += weight
         
         if weight_sum > 0:
             score = score / weight_sum
             
         scores.append(score * 100.0)
-        
+    
     best_scores = np.maximum.accumulate(scores)
     x = range(1, len(scores) + 1)
     
+    # Set up the plot aesthetics
     ax.set_facecolor('#f8f9fa')
     ax.grid(True, linestyle='--', alpha=0.7)
     
-    ax.plot(x, scores, 'o-', color='#4285f4', alpha=0.7, 
-           label='Experiment Scores', markersize=6)
+    # Mark experiment rounds if available
+    if hasattr(model, 'round_start_indices') and model.round_start_indices:
+        for idx in model.round_start_indices:
+            if 0 < idx < len(scores):
+                ax.axvline(idx + 1, color='#aaaaaa', linestyle='--', alpha=0.5)
     
-    ax.plot(x, best_scores, 'r-', linewidth=2.5, color='#ea4335', 
+    # Plot individual experiment markers, with size based on score
+    sizes = [max(20, s * 0.5) for s in scores]
+    scatter = ax.scatter(x, scores, s=sizes, c=range(len(scores)), 
+                       cmap='viridis', alpha=0.7, 
+                       label='Experiment Scores', 
+                       edgecolor='white', linewidth=0.5)
+    
+    # Add colorbar for experiment sequence
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+    cax = inset_axes(ax, width="3%", height="30%", loc='upper left',
+                    bbox_to_anchor=(1.02, 0.3, 1, 1),
+                    bbox_transform=ax.transAxes,
+                    borderpad=0)
+    cbar = plt.colorbar(scatter, cax=cax)
+    cbar.set_label('Experiment Sequence')
+    
+    # Plot experiment connecting line
+    ax.plot(x, scores, '--', color='#4285f4', alpha=0.5, linewidth=1)
+    
+    # Plot the best-so-far scores
+    ax.plot(x, best_scores, '-', linewidth=2.5, color='#ea4335', 
            label='Best Score So Far')
     
+    # Add parameter importance analysis as inset
+    try:
+        param_importance = model.analyze_parameter_importance()
+        
+        if param_importance:
+            # Create inset axes for parameter importance
+            ax_inset = inset_axes(ax, width="30%", height="25%", loc='lower right',
+                                 bbox_to_anchor=(0.98, 0.02, 1, 1),
+                                 bbox_transform=ax.transAxes,
+                                 borderpad=0)
+            
+            # Sort parameters by importance
+            sorted_params = sorted(param_importance.items(), key=lambda x: x[1], reverse=True)
+            
+            # Take top 5 parameters only
+            if len(sorted_params) > 5:
+                sorted_params = sorted_params[:5]
+                
+            params = [p[0] for p in sorted_params]
+            importance = [p[1] for p in sorted_params]
+            
+            # Plot horizontal bar chart
+            y_pos = range(len(params))
+            ax_inset.barh(y_pos, importance, color='#4285f4', alpha=0.7)
+            ax_inset.set_yticks(y_pos)
+            ax_inset.set_yticklabels(params, fontsize=8)
+            ax_inset.set_xlabel('Importance', fontsize=8)
+            ax_inset.set_title('Parameter Importance', fontsize=9)
+            ax_inset.set_xlim(0, 1.0)
+            
+            # Remove spines
+            for spine in ax_inset.spines.values():
+                spine.set_visible(False)
+                
+            # Add light gray background
+            ax_inset.set_facecolor('#f0f0f0')
+            ax_inset.set_axisbelow(True)
+            ax_inset.grid(axis='x', alpha=0.3)
+    except Exception as e:
+        print(f"Error plotting parameter importance: {e}")
+    
+    # Fit convergence model and project future performance
     try:
         from scipy.optimize import curve_fit
         
+        # Define an appropriate convergence model
         def convergence_model(x, a, b, c):
+            """Model of form: a * (1 - exp(-b * x)) + c"""
             return a * (1 - np.exp(-b * x)) + c
             
-        p0 = [max(100.0 - min(best_scores), 1.0), 0.1, min(best_scores[0], best_scores[-1])]
-        popt, _ = curve_fit(convergence_model, x, best_scores, p0=p0, maxfev=10000)
-                          
-        future_rounds = max(20, len(scores) * 2)
-        x_fit = np.linspace(1, len(scores) + future_rounds, 100)
-        y_fit = convergence_model(x_fit, *popt)
+        # Make initial parameter guesses
+        init_value = best_scores[0]
+        final_value = best_scores[-1]
+        growth_rate = 0.1  # Initial guess
         
-        a, b, c = popt
+        p0 = [final_value - init_value, growth_rate, init_value]
         
-        asymptotic_value = min(150.0, a + c)
-        
-        y_fit = np.minimum(y_fit, 150.0)
-        
-        ax.plot(x_fit, y_fit, '--', color='#34a853', linewidth=2,
-              label=f'Projected Convergence (Max: {asymptotic_value:.1f}%)')
-                           
-        ax.axhline(asymptotic_value, color='#fbbc05', linestyle=':', linewidth=2,
-                 label=f'Projected Maximum ({asymptotic_value:.1f}%)')
-                            
-        current = best_scores[-1]
-        target = 0.95 * asymptotic_value
-        
-        if a > 0:
-            target_x = -np.log(1 - (target - c) / a) / b if a > 0 else float('inf')
-            remaining_rounds = max(0, int(np.ceil(target_x - len(best_scores))))
+        # Fit the convergence model to the data
+        try:
+            popt, pcov = curve_fit(convergence_model, x, best_scores, p0=p0, maxfev=10000)
+            a, b, c = popt
             
-            if remaining_rounds > 0 and remaining_rounds < 50:
-                ax.axvline(target_x, color='#34a853', linestyle='--', alpha=0.5)
+            # Compute projected future values
+            future_rounds = max(20, len(scores) * 2)
+            x_fit = np.linspace(1, len(scores) + future_rounds, 100)
+            y_fit = convergence_model(x_fit, *popt)
+            
+            # Cap predictions to reasonable values
+            max_possible = 100.0
+            y_fit = np.minimum(y_fit, max_possible)
+            
+            # Plot the convergence curve with confidence regions
+            ax.plot(x_fit, y_fit, '--', color='#34a853', linewidth=2,
+                  label=f'Predicted Convergence')
+                  
+            # Calculate the asymptotic value (a + c)
+            asymptotic_value = min(max_possible, a + c)
+            
+            # Add a horizontal line for the asymptotic value
+            ax.axhline(asymptotic_value, color='#fbbc05', linestyle=':', linewidth=2,
+                     label=f'Projected Maximum ({asymptotic_value:.1f}%)')
+            
+            # Calculate and show how many more rounds needed to reach 95% of maximum
+            current = best_scores[-1]
+            target = 0.95 * asymptotic_value
+            
+            if a > 0 and target > current:
+                # Calculate required number of iterations for target
+                from math import log
+                required_x = -log(1 - (target - c) / a) / b if a > 0 else float('inf')
+                remaining_rounds = max(0, int(np.ceil(required_x - len(best_scores))))
                 
-                ax.annotate(
-                    f'{remaining_rounds} rounds to reach target', 
-                    xy=(target_x, target),
-                    xytext=(len(scores) + 1, current + (target - current) * 0.5),
-                    arrowprops=dict(arrowstyle='->', color='#34a853', lw=1.5),
-                    bbox=dict(boxstyle='round,pad=0.5', fc='white', alpha=0.8),
-                    fontsize=10)
-        
-        ax.annotate(
-            f'Current: {current:.1f}%', 
-            xy=(len(scores), current), 
-            xytext=(len(scores) - min(len(scores) // 2, 3), current * 0.85),
-            arrowprops=dict(arrowstyle='->', color='#4285f4', lw=1.5),
-            bbox=dict(boxstyle='round,pad=0.5', fc='white', alpha=0.8),
-            fontsize=10)
-    except Exception:
-        pass
+                # Only show if it's a reasonable number
+                if 0 < remaining_rounds < 50:
+                    ax.axvline(required_x, color='#34a853', linestyle='--', alpha=0.5)
+                    
+                    # Add annotation with arrow
+                    ax.annotate(
+                        f'~{remaining_rounds} more rounds to reach\n95% of maximum potential', 
+                        xy=(required_x, target),
+                        xytext=(len(scores) + 1, current + (target - current) * 0.5),
+                        arrowprops=dict(arrowstyle='->', color='#34a853', lw=1.5),
+                        bbox=dict(boxstyle='round,pad=0.5', fc='white', alpha=0.8),
+                        fontsize=10
+                    )
+                    
+            # Add annotation showing current best
+            ax.annotate(
+                f'Current best: {current:.1f}%', 
+                xy=(len(scores), current), 
+                xytext=(len(scores) - min(len(scores) // 2, 3), current * 0.85),
+                arrowprops=dict(arrowstyle='->', color='#4285f4', lw=1.5),
+                bbox=dict(boxstyle='round,pad=0.5', fc='white', alpha=0.8),
+                fontsize=10
+            )
+            
+            # Add a confidence region around the prediction if possible
+            try:
+                perr = np.sqrt(np.diag(pcov))
+                upper = convergence_model(x_fit, *(popt + perr))
+                lower = convergence_model(x_fit, *(popt - perr))
+                upper = np.minimum(upper, max_possible)
+                lower = np.maximum(lower, 0)
+                
+                ax.fill_between(x_fit, lower, upper, color='#34a853', alpha=0.1)
+            except:
+                pass  # Skip confidence interval if it fails
+                
+        except Exception as e:
+            import traceback
+            print(f"Warning: Failed to fit convergence model: {e}")
+            print(traceback.format_exc())
+            
+    except ImportError:
+        print("Warning: scipy.optimize not available, skipping convergence prediction")
         
     ax.set_xlabel('Experiment Number', fontsize=12)
     ax.set_ylabel('Composite Score (%)', fontsize=12)
     ax.set_title('Optimization Convergence Analysis', fontsize=14, fontweight='bold')
     
-    max_score = max(max(best_scores), 100.0) if best_scores.size > 0 else 100.0
-    y_max = min(150.0, max_score * 1.2)
+    max_score = max(100.0, max(scores) * 1.1) if scores else 100.0
+    y_max = min(max_score, 100.0)
     ax.set_ylim(0, y_max)
     
-    legend = ax.legend(loc='lower right', framealpha=0.9, fontsize=10)
+    legend = ax.legend(loc='upper left', framealpha=0.9, fontsize=10)
     legend.get_frame().set_facecolor('#ffffff')
     
     return ax

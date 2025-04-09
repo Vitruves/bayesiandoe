@@ -71,9 +71,6 @@ class SplashScreen(QSplashScreen):
         font.setStyleStrategy(QFont.PreferAntialias)
         painter.setFont(font)
         
-        painter.setPen(QColor(0, 0, 0, 120))
-        painter.drawText(rect.adjusted(4, 4, 4, 4), Qt.AlignHCenter | Qt.AlignBottom, "BAYESIAN DOE")
-        
         painter.setPen(QColor(240, 250, 250))
         painter.drawText(rect.adjusted(0, 0, 0, -rect.height()/3), Qt.AlignHCenter | Qt.AlignBottom, "BAYESIAN DOE")
         

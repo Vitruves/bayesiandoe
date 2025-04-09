@@ -75,6 +75,11 @@ class BayesianDOEApp(QMainWindow):
         self.registry_manager.initialize_registry()
         self.registry = self.registry_manager.get_full_registry()
         
+        self.experiment_spin = QSpinBox()
+        self.experiment_spin.setMinimum(1)
+        self.experiment_spin.setMaximum(1000)
+        self.experiment_spin.setValue(10)
+        
         self.init_ui()
         
     def init_ui(self):
@@ -172,7 +177,7 @@ class BayesianDOEApp(QMainWindow):
         main_layout.addWidget(self.tab_widget)
         
         self.setCentralWidget(central_widget)
-    
+        
     def log(self, message):
         log(self, message)
 
