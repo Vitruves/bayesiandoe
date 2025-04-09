@@ -502,20 +502,37 @@ def generate_initial_experiments(self):
             self.log("-- No objectives defined. Define objectives first - Error")
             return
             
-        # Generate suggestions
-        suggestions = self.model.suggest_experiments(n_experiments)
+        # Generate initial experiments
+        method = self.design_method_combo.currentText().lower()
         
-        # Store suggestions as planned experiments
+        if hasattr(self.model, 'planned_experiments'):
+            self.model.planned_experiments = []
+        else:
+            self.model.planned_experiments = []
+            
+        self.round_start_indices = []
+        
+        if method == "tpe":
+            suggestions = self.model._suggest_with_tpe(n_experiments)
+        elif method == "gpei":
+            suggestions = self.model._suggest_with_gp(n_experiments)
+        elif method == "random":
+            suggestions = self.model._suggest_random(n_experiments)
+        elif method == "latin hypercube":
+            suggestions = self.model._suggest_with_lhs(n_experiments)
+        elif method == "sobol":
+            suggestions = self.model._suggest_with_sobol(n_experiments)
+        else:
+            # Default to TPE if method not recognized
+            suggestions = self.model._suggest_with_tpe(n_experiments)
+            
         self.model.planned_experiments = suggestions
-        
-        # Mark the start of this round
-        self.round_start_indices = [0]
         self.current_round = 1
         
         # Update the UI
         update_ui_from_model(self)
         
-        self.log(f"-- Generated {n_experiments} initial experiments - Success")
+        self.log(f"-- Generated {n_experiments} initial experiments with {method.upper()} sampling - Success")
         
     except Exception as e:
         self.log(f"-- Failed to generate experiments: {str(e)} - Error")
@@ -562,62 +579,54 @@ def generate_next_experiments(self):
 def add_result_for_selected(self):
     selected_items = self.experiment_table.selectedItems()
     if not selected_items:
-        QMessageBox.warning(self, "Warning", "Select an experiment first.")
+        self.log("-- Please select an experiment from the table first - Error")
         return
         
     row = selected_items[0].row()
-    id_item = self.experiment_table.item(row, 1)
+    id_item = None
     
-    if not id_item or not id_item.text().isdigit():
-        QMessageBox.warning(self, "Warning", "Invalid experiment selection.")
+    # Skip header rows
+    for col in range(self.experiment_table.columnCount()):
+        item = self.experiment_table.item(row, col)
+        if item and col == 1:  # ID column
+            id_item = item
+            break
+    
+    if not id_item or not id_item.text() or "Round" in id_item.text():
+        self.log("-- Invalid experiment selection. Please select a valid experiment row - Error")
         return
         
-    exp_id = int(id_item.text()) - 1
-    
+    try:
+        exp_id = int(id_item.text()) - 1
+    except ValueError:
+        self.log("-- Invalid experiment ID. Please select a valid experiment row - Error")
+        return
+        
     if exp_id < 0 or exp_id >= len(self.model.planned_experiments):
-        QMessageBox.warning(self, "Warning", "Invalid experiment ID.")
+        self.log("-- Invalid experiment ID - Error")
         return
-        
+    
+    # Check if this experiment already has results
     for i, exp in enumerate(self.model.experiments):
-        params_match = True
-        for param_name, param_value in self.model.planned_experiments[exp_id].items():
-            if param_name not in exp['params'] or exp['params'][param_name] != param_value:
-                params_match = False
-                break
-                
-        if params_match:
-            overwrite = QMessageBox.question(
-                self,
-                "Overwrite Result",
-                "This experiment already has results. Overwrite?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No
-            )
-            
-            if overwrite == QMessageBox.Yes:
-                self.model.experiments.pop(i)
-                break
-            else:
-                return
+        if "params" in exp and all(exp["params"].get(k) == self.model.planned_experiments[exp_id].get(k) 
+                                  for k in self.model.parameters.keys()):
+            self.log(f"-- Experiment #{exp_id+1} already has results - Error")
+            return
     
-    dialog = ResultDialog(self, self.model, exp_id, self.model.planned_experiments[exp_id])
+    params = self.model.planned_experiments[exp_id]
     
+    dialog = ResultDialog(self, self.model, exp_id, params)
     if dialog.exec() == QDialog.Accepted and dialog.result:
-        self.model.add_experiment_result(
-            params=dialog.result["params"],
-            results=dialog.result["results"]
-        )
+        self.model.add_experiment_result(dialog.result["params"], dialog.result["results"])
         
-        self.experiment_table.update_from_planned(self.model, self.round_start_indices)
-        
-        completed = len(self.model.experiments)
-        total = len(self.model.planned_experiments)
-        self.results_count_label.setText(f"{completed} / {total}")
-        
+        # Update the UI
+        update_ui_from_model(self)
         update_best_result_label(self)
-        update_results_plot(self)
-        update_best_results(self)
-        self.all_results_table.update_from_model(self.model)
+        
+        # If we're currently on the Results tab, update the plots
+        if self.tab_widget.currentIndex() == 3:
+            update_results_plot(self)
+            update_best_results(self)
         
         log(self, f"-- Added result for experiment #{exp_id+1} - Success")
 

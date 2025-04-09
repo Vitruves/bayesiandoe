@@ -343,6 +343,8 @@ def plot_convergence(model, ax=None):
     """
     if ax is None:
         fig, ax = plt.subplots(figsize=(10, 7))
+    else:
+        fig = ax.figure
     
     if not model.experiments:
         ax.text(0.5, 0.5, "No experiment results yet", 
@@ -392,7 +394,7 @@ def plot_convergence(model, ax=None):
                     bbox_to_anchor=(1.02, 0.3, 1, 1),
                     bbox_transform=ax.transAxes,
                     borderpad=0)
-    cbar = plt.colorbar(scatter, cax=cax)
+    cbar = fig.colorbar(scatter, cax=cax)
     cbar.set_label('Experiment Sequence')
     
     # Plot experiment connecting line

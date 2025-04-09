@@ -88,6 +88,10 @@ class BayesianDOEApp(QMainWindow):
         
         self.log_display = LogDisplay()
         
+        # Add the n_initial_spin and n_next_spin attributes
+        self.n_initial_spin = None
+        self.n_next_spin = None
+        
         self.create_menu_bar()
         self.create_status_bar()
         self.create_central_widget()

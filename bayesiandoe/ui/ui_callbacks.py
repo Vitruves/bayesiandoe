@@ -25,6 +25,16 @@ def update_objectives(self):
                     pass
         
         if objectives:
+            # Ensure model has the method
+            if not hasattr(self.model, 'set_objectives'):
+                # Add the method dynamically if missing
+                def set_objectives(model_self, objs):
+                    model_self.objectives = list(objs.keys())
+                    model_self.objective_weights = objs
+                
+                import types
+                self.model.set_objectives = types.MethodType(set_objectives, self.model)
+            
             self.model.set_objectives(objectives)
             self.log(f"-- Objectives updated: {', '.join(objectives.keys())} - Success")
         else:
@@ -32,16 +42,13 @@ def update_objectives(self):
     except Exception as e:
         self.log(f"-- Failed to update objectives: {str(e)} - Error")
 
-def show_registry_item_tooltip(self, item):
+def show_registry_item_tooltip(self, item, reg_type, category):
     """Show tooltip with detailed properties for registry items"""
     if not item:
         return
         
-    registry_type = self.registry_type_combo.currentText().lower()
-    category = self.registry_category_combo.currentText()
     item_name = item.text()
-    
-    properties = self.registry_manager.get_item_properties(registry_type, category, item_name)
+    properties = self.registry_manager.get_item_properties(reg_type, category, item_name)
     
     if properties:
         tooltip = "<html><body><table>"
@@ -53,9 +60,9 @@ def show_registry_item_tooltip(self, item):
                 
         tooltip += "</table></body></html>"
         
-        self.registry_list.setToolTip(tooltip)
+        item.setToolTip(tooltip)
     else:
-        self.registry_list.setToolTip("")
+        item.setToolTip("")
 
 def refresh_registry(self):
     for reg_type, categories in self.registry_lists.items():

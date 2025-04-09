@@ -221,192 +221,200 @@ class ExperimentTable(QTableWidget):
         self.horizontalHeader().setSectionResizeMode(predict_col, QHeaderView.ResizeToContents)
         
     def update_from_planned(self, model, round_start_indices):
-        vscroll = self.verticalScrollBar().value()
-        
-        selected_exp_id = -1
-        if self.selectedItems():
-            selected_row_index = self.selectedItems()[0].row()
-            id_item = self.item(selected_row_index, 1)
-            if id_item and id_item.text().isdigit():
-                try:
-                    selected_exp_id = int(id_item.text()) - 1
-                except ValueError:
-                    pass
+        # Make sure we preserve existing functionality but improve it
+        # Add additional debugging code if necessary
+        try:
+            if not hasattr(model, 'planned_experiments') or not model.planned_experiments:
+                return
+            
+            vscroll = self.verticalScrollBar().value()
+            
+            selected_exp_id = -1
+            if self.selectedItems():
+                selected_row_index = self.selectedItems()[0].row()
+                id_item = self.item(selected_row_index, 1)
+                if id_item and id_item.text().isdigit():
+                    try:
+                        selected_exp_id = int(id_item.text()) - 1
+                    except ValueError:
+                        pass
 
-        self.setRowCount(0)
-        current_round_num = 0
-        
-        exp_id_to_row = {}
-        
-        exp_to_round = {}
-        next_round_idx = 0
-        for i in range(len(model.planned_experiments)):
-            if next_round_idx < len(round_start_indices) and i >= round_start_indices[next_round_idx]:
-                current_round_num += 1
-                next_round_idx += 1
-            exp_to_round[i] = current_round_num
+            self.setRowCount(0)
+            current_round_num = 0
             
-        current_display_round = 0
-        for i, params in enumerate(model.planned_experiments):
-            round_num = exp_to_round.get(i, 1)
+            exp_id_to_row = {}
             
-            if current_display_round != round_num:
-                current_display_round = round_num
-                if self.rowCount() > 0:
-                    separator_row_index = self.rowCount()
-                    self.insertRow(separator_row_index)
-                    separator_item = QTableWidgetItem(f"--- Round {round_num} ---")
-                    separator_item.setTextAlignment(Qt.AlignCenter)
-                    separator_item.setBackground(QColor(220, 220, 220))
-                    separator_item.setForeground(QColor(80, 80, 80))
-                    font = separator_item.font()
-                    font.setBold(True)
-                    separator_item.setFont(font)
-                    self.setSpan(separator_row_index, 0, 1, self.columnCount())
-                    self.setItem(separator_row_index, 0, separator_item)
-                    separator_item.setFlags(separator_item.flags() & ~Qt.ItemIsSelectable)
+            exp_to_round = {}
+            next_round_idx = 0
+            for i in range(len(model.planned_experiments)):
+                if next_round_idx < len(round_start_indices) and i >= round_start_indices[next_round_idx]:
+                    current_round_num += 1
+                    next_round_idx += 1
+                exp_to_round[i] = current_round_num
+                
+            current_display_round = 0
+            for i, params in enumerate(model.planned_experiments):
+                round_num = exp_to_round.get(i, 1)
+                
+                if current_display_round != round_num:
+                    current_display_round = round_num
+                    if self.rowCount() > 0:
+                        separator_row_index = self.rowCount()
+                        self.insertRow(separator_row_index)
+                        separator_item = QTableWidgetItem(f"--- Round {round_num} ---")
+                        separator_item.setTextAlignment(Qt.AlignCenter)
+                        separator_item.setBackground(QColor(220, 220, 220))
+                        separator_item.setForeground(QColor(80, 80, 80))
+                        font = separator_item.font()
+                        font.setBold(True)
+                        separator_item.setFont(font)
+                        self.setSpan(separator_row_index, 0, 1, self.columnCount())
+                        self.setItem(separator_row_index, 0, separator_item)
+                        separator_item.setFlags(separator_item.flags() & ~Qt.ItemIsSelectable)
 
-            row_index = self.rowCount()
-            self.insertRow(row_index)
-            exp_id_to_row[i] = row_index
+                row_index = self.rowCount()
+                self.insertRow(row_index)
+                exp_id_to_row[i] = row_index
+                
+                round_item = QTableWidgetItem(str(round_num))
+                round_item.setTextAlignment(Qt.AlignCenter)
+                font = round_item.font()
+                font.setBold(True)
+                round_item.setFont(font)
+                self.setItem(row_index, 0, round_item)
+                
+                id_item = QTableWidgetItem(str(i + 1))
+                id_item.setTextAlignment(Qt.AlignCenter)
+                self.setItem(row_index, 1, id_item)
+                
+                # Set parameter values
+                for col, param_name in enumerate(model.parameters.keys(), 2):
+                    value_str = ""
+                    if param_name in params:
+                        value = params[param_name]
+                        if isinstance(value, float):
+                            value_str = settings.format_value(value)
+                        else:
+                            value_str = str(value)
+                    param_item = QTableWidgetItem(value_str)
+                    param_item.setTextAlignment(Qt.AlignCenter if isinstance(params.get(param_name), (int, float)) else Qt.AlignLeft)
+                    self.setItem(row_index, col, param_item)
+                
+                # Initialize objective and prediction columns with empty cells
+                for col_idx in range(2 + len(model.parameters), self.columnCount()):
+                    self.setItem(row_index, col_idx, QTableWidgetItem(""))
             
-            round_item = QTableWidgetItem(str(round_num))
-            round_item.setTextAlignment(Qt.AlignCenter)
-            font = round_item.font()
-            font.setBold(True)
-            round_item.setFont(font)
-            self.setItem(row_index, 0, round_item)
-            
-            id_item = QTableWidgetItem(str(i + 1))
-            id_item.setTextAlignment(Qt.AlignCenter)
-            self.setItem(row_index, 1, id_item)
-            
-            # Set parameter values
-            for col, param_name in enumerate(model.parameters.keys(), 2):
-                value_str = ""
-                if param_name in params:
-                    value = params[param_name]
-                    if isinstance(value, float):
-                        value_str = settings.format_value(value)
-                    else:
-                        value_str = str(value)
-                param_item = QTableWidgetItem(value_str)
-                param_item.setTextAlignment(Qt.AlignCenter if isinstance(params.get(param_name), (int, float)) else Qt.AlignLeft)
-                self.setItem(row_index, col, param_item)
-            
-            # Initialize objective and prediction columns with empty cells
-            for col_idx in range(2 + len(model.parameters), self.columnCount()):
-                self.setItem(row_index, col_idx, QTableWidgetItem(""))
-        
-        completed_indices = set()
-        for completed_exp in model.experiments:
-            found_match_idx = -1
-            for planned_idx, planned_params in enumerate(model.planned_experiments):
-                if planned_idx in completed_indices:
-                    continue
-                    
-                matches_all_params = True
-                if set(planned_params.keys()) != set(k for k in completed_exp['params'] if k in model.parameters):
-                     matches_all_params = False
-                else:
-                    for p_name, p_value in planned_params.items():
-                        if p_name not in completed_exp['params']:
-                            matches_all_params = False
-                            break
-                            
-                        comp_value = completed_exp['params'][p_name]
+            completed_indices = set()
+            for completed_exp in model.experiments:
+                found_match_idx = -1
+                for planned_idx, planned_params in enumerate(model.planned_experiments):
+                    if planned_idx in completed_indices:
+                        continue
                         
-                        param_type = model.parameters.get(p_name).param_type if p_name in model.parameters else "unknown"
-                        if param_type == "continuous":
-                            if abs(float(p_value) - float(comp_value)) > 1e-5:
+                    matches_all_params = True
+                    if set(planned_params.keys()) != set(k for k in completed_exp['params'] if k in model.parameters):
+                         matches_all_params = False
+                    else:
+                        for p_name, p_value in planned_params.items():
+                            if p_name not in completed_exp['params']:
                                 matches_all_params = False
                                 break
-                        elif p_value != comp_value:
-                            matches_all_params = False
-                            break
-                
-                if matches_all_params:
-                    found_match_idx = planned_idx
-                    break
-
-            if found_match_idx != -1 and found_match_idx in exp_id_to_row:
-                completed_indices.add(found_match_idx)
-                row_index = exp_id_to_row[found_match_idx]
-                
-                # Highlight the completed experiment row
-                for col in range(self.columnCount()):
-                    item = self.item(row_index, col)
-                    if item:
-                        item.setBackground(QColor(224, 255, 224))
-                
-                # Fill in results for each objective
-                if "results" in completed_exp:
-                    objective_base_col = 2 + len(model.parameters)
-                    for obj_idx, obj_name in enumerate(model.objectives):
-                        if obj_name in completed_exp["results"] and completed_exp["results"][obj_name] is not None:
-                            obj_col_idx = objective_base_col + obj_idx
-                            obj_value = completed_exp["results"][obj_name] * 100.0
-                            obj_item = QTableWidgetItem(f"{obj_value:.2f}%")
-                            obj_item.setTextAlignment(Qt.AlignCenter)
-                            obj_item.setBackground(QColor(224, 255, 224))
-                            self.setItem(row_index, obj_col_idx, obj_item)
+                                
+                            comp_value = completed_exp['params'][p_name]
+                            
+                            param_type = model.parameters.get(p_name).param_type if p_name in model.parameters else "unknown"
+                            if param_type == "continuous":
+                                if abs(float(p_value) - float(comp_value)) > 1e-5:
+                                    matches_all_params = False
+                                    break
+                            elif p_value != comp_value:
+                                matches_all_params = False
+                                break
                     
-                    # Clear prediction since we have actual results
-                    predict_col_idx = self.columnCount() - 1
-                    pred_item = self.item(row_index, predict_col_idx)
-                    if pred_item:
-                         pred_item.setText("")
+                    if matches_all_params:
+                        found_match_idx = planned_idx
+                        break
 
-        # Generate predictions for incomplete experiments if we have data
-        if len(model.experiments) >= 1:
-            for i, planned_params in enumerate(model.planned_experiments):
-                if i in completed_indices or i not in exp_id_to_row:
-                    continue
+                if found_match_idx != -1 and found_match_idx in exp_id_to_row:
+                    completed_indices.add(found_match_idx)
+                    row_index = exp_id_to_row[found_match_idx]
                     
-                row_index = exp_id_to_row[i]
-                predict_col_idx = self.columnCount() - 1
-                
-                # Only predict if we have the first objective (usually yield)
-                if model.objectives and model.objectives[0] in model.objective_weights:
-                    try:
-                        k = 5  # Number of nearest neighbors to consider
-                        distances = []
-                        target_obj = model.objectives[0]  # First objective to predict
+                    # Highlight the completed experiment row
+                    for col in range(self.columnCount()):
+                        item = self.item(row_index, col)
+                        if item:
+                            item.setBackground(QColor(224, 255, 224))
+                    
+                    # Fill in results for each objective
+                    if "results" in completed_exp:
+                        objective_base_col = 2 + len(model.parameters)
+                        for obj_idx, obj_name in enumerate(model.objectives):
+                            if obj_name in completed_exp["results"] and completed_exp["results"][obj_name] is not None:
+                                obj_col_idx = objective_base_col + obj_idx
+                                obj_value = completed_exp["results"][obj_name] * 100.0
+                                obj_item = QTableWidgetItem(f"{obj_value:.2f}%")
+                                obj_item.setTextAlignment(Qt.AlignCenter)
+                                obj_item.setBackground(QColor(224, 255, 224))
+                                self.setItem(row_index, obj_col_idx, obj_item)
                         
-                        for completed_exp in model.experiments:
-                            if "results" in completed_exp and target_obj in completed_exp['results'] and completed_exp['results'][target_obj] is not None:
-                                dist = _calculate_parameter_distance(planned_params, completed_exp['params'], model.parameters)
-                                distances.append((dist, completed_exp['results'][target_obj]))
+                        # Clear prediction since we have actual results
+                        predict_col_idx = self.columnCount() - 1
+                        pred_item = self.item(row_index, predict_col_idx)
+                        if pred_item:
+                             pred_item.setText("")
 
-                        if distances:
-                            distances.sort(key=lambda x: x[0])
-                            neighbors = distances[:k]
-                            neighbor_values = [y for _, y in neighbors]
+            # Generate predictions for incomplete experiments if we have data
+            if len(model.experiments) >= 1:
+                for i, planned_params in enumerate(model.planned_experiments):
+                    if i in completed_indices or i not in exp_id_to_row:
+                        continue
+                        
+                    row_index = exp_id_to_row[i]
+                    predict_col_idx = self.columnCount() - 1
+                    
+                    # Only predict if we have the first objective (usually yield)
+                    if model.objectives and model.objectives[0] in model.objective_weights:
+                        try:
+                            k = 5  # Number of nearest neighbors to consider
+                            distances = []
+                            target_obj = model.objectives[0]  # First objective to predict
+                            
+                            for completed_exp in model.experiments:
+                                if "results" in completed_exp and target_obj in completed_exp['results'] and completed_exp['results'][target_obj] is not None:
+                                    dist = _calculate_parameter_distance(planned_params, completed_exp['params'], model.parameters)
+                                    distances.append((dist, completed_exp['results'][target_obj]))
 
-                            if neighbor_values:
-                                pred_value = np.mean(neighbor_values) * 100.0
-                                pred_item = QTableWidgetItem(f"{settings.format_value(pred_value)}%?")
-                                pred_item.setForeground(QColor(100, 100, 150))
-                                pred_item.setTextAlignment(Qt.AlignCenter)
-                                self.setItem(row_index, predict_col_idx, pred_item)
+                            if distances:
+                                distances.sort(key=lambda x: x[0])
+                                neighbors = distances[:k]
+                                neighbor_values = [y for _, y in neighbors]
+
+                                if neighbor_values:
+                                    pred_value = np.mean(neighbor_values) * 100.0
+                                    pred_item = QTableWidgetItem(f"{settings.format_value(pred_value)}%?")
+                                    pred_item.setForeground(QColor(100, 100, 150))
+                                    pred_item.setTextAlignment(Qt.AlignCenter)
+                                    self.setItem(row_index, predict_col_idx, pred_item)
+                                else:
+                                    pred_item = self.item(row_index, predict_col_idx)
+                                    if pred_item:
+                                        pred_item.setText("")
                             else:
                                 pred_item = self.item(row_index, predict_col_idx)
                                 if pred_item:
                                     pred_item.setText("")
-                        else:
+                        except Exception as e:
+                            print(f"Prediction error for exp {i+1}: {e}")
                             pred_item = self.item(row_index, predict_col_idx)
                             if pred_item:
                                 pred_item.setText("")
-                    except Exception as e:
-                        print(f"Prediction error for exp {i+1}: {e}")
-                        pred_item = self.item(row_index, predict_col_idx)
-                        if pred_item:
-                            pred_item.setText("")
 
-        self.verticalScrollBar().setValue(vscroll)
-        
-        if selected_exp_id >= 0 and selected_exp_id in exp_id_to_row:
-             self.selectRow(exp_id_to_row[selected_exp_id])
+            self.verticalScrollBar().setValue(vscroll)
+            
+            if selected_exp_id >= 0 and selected_exp_id in exp_id_to_row:
+                 self.selectRow(exp_id_to_row[selected_exp_id])
+        except Exception as e:
+            print(f"Error in update_from_planned: {e}")
 
 class BestResultsTable(QTableWidget):
     def __init__(self, parent=None):

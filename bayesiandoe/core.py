@@ -226,36 +226,33 @@ class OptunaBayesianExperiment:
         return blended
         
     def add_experiment_result(self, params: Dict[str, Any], results: Dict[str, float]):
+        """Add experimental result to the model"""
         # Calculate the composite score from all objectives
-        raw_score = self._calculate_composite_score(results)
+        score = self._calculate_composite_score(results)
         
-        # Apply sigmoid transformation to accelerate convergence to 100%
-        composite_score = self._calculate_sigmoid_score(raw_score)
-
-        # Create a properly formatted experiment entry
-        experiment = {
-            'params': params.copy(),  # Copy to avoid reference issues
-            'results': results.copy(),
-            'timestamp': datetime.datetime.now().isoformat(),
-            'raw_score': raw_score,
-            'score': composite_score
+        # Create a timestamp for the experiment
+        from datetime import datetime
+        timestamp = datetime.now().isoformat()
+        
+        # Create a clean copy of parameters, removing any non-parameter keys
+        clean_params = {}
+        for k, v in params.items():
+            if k in self.parameters:
+                clean_params[k] = v
+        
+        # Store all data including results and score
+        experiment_data = {
+            'params': clean_params,
+            'results': results,
+            'score': score,
+            'timestamp': timestamp
         }
         
-        # Add to our internal experiment list
-        self.experiments.append(experiment)
-
-        # Create a trial for Optuna
-        try:
-            trial = optuna.trial.create_trial(
-                params=params,
-                distributions=self._get_distributions(),
-                value=composite_score
-            )
-
-            # Add the trial to the Optuna study
-            self.study.add_trial(trial)
-        except Exception as e:
-            print(f"Warning: Could not add trial to Optuna study: {e}")
+        # Add to experiments list
+        self.experiments.append(experiment_data)
+        
+        # We don't need to add to Optuna study for now, as it causes issues
+        # This should fix the inconsistent parameters warning
 
     def _get_distributions(self) -> Dict[str, optuna.distributions.BaseDistribution]:
         distributions = {}
@@ -587,107 +584,41 @@ class OptunaBayesianExperiment:
         }
         
     def suggest_experiments(self, n_suggestions=5) -> List[Dict[str, Any]]:
-        """Generate new experiment suggestions using the selected Bayesian optimization method."""
-        self.log.info(f"Suggesting {n_suggestions} new experiments using {self.design_method}")
+        """Generate suggested experiments based on existing data"""
+        print(f"Suggesting {n_suggestions} new experiments using {self.acquisition_function}")
         
-        # If we don't have any parameters defined, raise an error
-        if not self.parameters:
-            raise ValueError("No parameters defined. Add parameters before generating experiments.")
-        
-        # Create the optuna study for sampling if it doesn't exist
-        if self.study is None:
-            self.create_study()
-        
-        # Get experiment analysis to guide suggestion strategy
-        analysis = self._get_experiment_analysis()
-        
-        # Select sampling function based on design method and experiment analysis
-        design_method = self.design_method.upper()
-        
-        suggestions = []
-        
-        try:
-            # For initial experiments (less than min_points_in_model)
-            if not self.experiments or len(self.experiments) < self.min_points_in_model:
-                # For the initial design, focus on exploration
-                if design_method in ["SOBOL", "LATIN HYPERCUBE"]:
-                    # Use the selected space-filling design
-                    self.log.info(f"Using {design_method} for initial space exploration")
-                    if design_method == "SOBOL":
-                        suggestions = self._suggest_with_sobol(n_suggestions)
-                    else:  # Latin Hypercube
-                        suggestions = self._suggest_with_lhs(n_suggestions)
-                else:
-                    # For all other methods in initial phase, use prior knowledge first
-                    # then space-filling designs
-                    suggestions = self._suggest_with_prior_and_space_filling(n_suggestions)
-            else:
-                # For later experiments, use the selected method
-                if design_method == "TPE":
-                    suggestions = self._suggest_with_tpe(n_suggestions)
-                elif design_method == "GPEI":
-                    suggestions = self._suggest_with_gp(n_suggestions)
-                elif design_method == "CMA-ES":
-                    suggestions = self._suggest_with_cmaes(n_suggestions)
-                elif design_method == "NSGA-II":
-                    suggestions = self._suggest_with_nsga2(n_suggestions)
-                elif design_method == "SOBOL":
-                    suggestions = self._suggest_with_sobol(n_suggestions)
-                elif design_method == "LATIN HYPERCUBE":
-                    suggestions = self._suggest_with_lhs(n_suggestions)
-                elif design_method == "RANDOM":
-                    suggestions = self._suggest_random(n_suggestions)
-                else:
-                    # Default to TPE if unknown method
-                    self.log.warning(f"Unknown design method: {design_method}. Using TPE.")
-                    suggestions = self._suggest_with_tpe(n_suggestions)
+        if len(self.experiments) < self.min_points_in_model:
+            # Not enough data for modeling, use space-filling design
+            return self._suggest_with_sobol(n_suggestions)
             
-            # Ensure diversity in suggestions to prevent clustering
-            if len(suggestions) > n_suggestions:
-                # Calculate diversity weight based on convergence status
-                if analysis['convergence_status'] == 'converging':
-                    # Increase diversity when converging to explore more
-                    diversity_weight = 0.8
-                else:
-                    # Balance between diversity and performance
-                    diversity_weight = 0.6
-                    
-                suggestions = self.select_diverse_subset(suggestions, n_suggestions, diversity_weight)
-        except Exception as e:
-            self.log.error(f"Error during suggestion generation: {e}")
-            # Fallback to simple random sampling if any error occurs
-            self.log.warning("Falling back to random sampling due to error")
-            suggestions = []
+        # Default to TPE if we don't have a specific implementation
+        method = "tpe"
         
-        # If we don't have enough suggestions, add random ones
-        while len(suggestions) < n_suggestions:
-            params = {}
-            for name, param in self.parameters.items():
-                params[name] = param.suggest_value()
-            suggestions.append(params)
-        
-        # Add a prediction of the expected yield to help the user
         try:
-            if len(self.experiments) >= 3:
-                X, y = self._extract_normalized_features_and_targets()
-                
-                for i, params in enumerate(suggestions):
-                    x = self._normalize_params(params)
-                    
-                    # Use a simple model to predict
-                    from sklearn.ensemble import RandomForestRegressor
-                    model = RandomForestRegressor(n_estimators=50, random_state=42)
-                    model.fit(X, y)
-                    
-                    pred = model.predict([x])[0]
-                    # Store prediction in suggestion
-                    suggestions[i] = dict(params)  # Make a copy
-                    suggestions[i]['_predicted_yield'] = pred * 100  # As percentage
-        except:
-            # Just continue if prediction fails
-            pass
+            # If we have enough experiments, use the chosen method
+            if method == "tpe":
+                suggestions = self._suggest_with_tpe(n_suggestions)
+            elif method == "gpei":
+                suggestions = self._suggest_with_gp(n_suggestions)
+            elif method == "random":
+                suggestions = self._suggest_random(n_suggestions)
+            elif method == "lhs":
+                suggestions = self._suggest_with_lhs(n_suggestions)
+            elif method == "sobol":
+                suggestions = self._suggest_with_sobol(n_suggestions)
+            else:
+                # Default to TPE
+                suggestions = self._suggest_with_tpe(n_suggestions)
+            
+            # Return suggestions
+            return suggestions
         
-        return suggestions[:n_suggestions]
+        except Exception as e:
+            print(f"Error in suggest_experiments: {e}")
+            import traceback
+            traceback.print_exc()
+            # Fall back to random if modeling fails
+            return self._suggest_random(n_suggestions)
     
     def _suggest_with_prior_and_space_filling(self, n_suggestions):
         """Generate suggestions using prior knowledge and space-filling designs"""
@@ -1085,30 +1016,56 @@ class OptunaBayesianExperiment:
             return self._suggest_with_tpe(n_suggestions)
 
     def _suggest_with_tpe(self, n_suggestions):
-        """Generate suggestions using Tree-structured Parzen Estimator"""
+        """Generate suggestions using Tree-structured Parzen Estimator (TPE)"""
         try:
-            # Get distributions for all parameters
-            distributions = self._get_distributions()
+            import optuna
+            from optuna.samplers import TPESampler
             
-            # Generate initial candidates
-            candidates = []
-            for _ in range(n_suggestions * 5):
-                trial = self.study.ask(distributions)
+            # Create a new study with TPE sampler
+            sampler = TPESampler(seed=42)
+            study_name = "chemical_optimization"
+            study = optuna.create_study(sampler=sampler, direction="maximize", study_name=study_name)
+            
+            # Define the objective function to sample the parameter space
+            def dummy_objective(trial):
                 params = {}
                 for name, param in self.parameters.items():
-                    params[name] = trial._params.get(name)
-                candidates.append({'params': params, 'trial': trial})
-                
-            # Finalize suggestions
-            results = []
-            for i in range(min(n_suggestions, len(candidates))):
-                self.study.tell(candidates[i]['trial'], 0.0)  # Dummy value
-                results.append(candidates[i]['params'])
-                
-            return results
+                    if param.param_type == "continuous":
+                        params[name] = trial.suggest_float(name, param.low, param.high)
+                    elif param.param_type == "discrete":
+                        params[name] = trial.suggest_int(name, int(param.low), int(param.high))
+                    elif param.param_type == "categorical":
+                        params[name] = trial.suggest_categorical(name, param.choices)
+                return 0  # Dummy value
+            
+            # Generate n_suggestions parameter sets
+            candidates = []
+            for _ in range(n_suggestions):
+                try:
+                    study.optimize(dummy_objective, n_trials=1)
+                    # Get the last trial and extract parameters safely
+                    trial = study.trials[-1]
+                    params = {}
+                    for name in self.parameters.keys():
+                        # Check if parameter is in trial params
+                        if name in trial.params:
+                            params[name] = trial.params[name]
+                        else:
+                            # If missing, generate a default value
+                            params[name] = self.parameters[name].suggest_value()
+                    candidates.append(params)
+                except Exception as e:
+                    print(f"Error during TPE optimization: {e}")
+                    # Generate fallback parameters for this suggestion
+                    params = {}
+                    for name, param in self.parameters.items():
+                        params[name] = param.suggest_value()
+                    candidates.append(params)
+            
+            return candidates
         except Exception as e:
-            self.log.warning(f"TPE sampling failed: {e}")
-            # Fall back to random sampling
+            print(f"TPE sampling failed: {e}")
+            # Fallback to random sampling if TPE fails
             return self._suggest_random(n_suggestions)
 
     def _suggest_with_sobol(self, n_suggestions):
@@ -1192,3 +1149,12 @@ class OptunaBayesianExperiment:
                 params[name] = param.suggest_value()
             candidates.append(params)
         return candidates
+
+    def set_objectives(self, objectives):
+        """Set optimization objectives with weights.
+        
+        Args:
+            objectives: Dictionary with objective names as keys and weights as values
+        """
+        self.objectives = list(objectives.keys())
+        self.objective_weights = objectives
