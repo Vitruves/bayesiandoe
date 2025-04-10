@@ -51,23 +51,36 @@ def show_registry_item_tooltip(self, item, reg_type, category):
     """Show tooltip with detailed properties for registry items"""
     if not item:
         return
-        
+
     item_name = item.text()
-    properties = self.registry_manager.get_item_properties(reg_type, category, item_name)
-    
+    # Add logging here to check fetched properties
+    try:
+        properties = self.registry_manager.get_item_properties(reg_type, category, item_name)
+        print(f"-- Tooltip Check: Item='{item_name}', Type='{reg_type}', Cat='{category}', Props={properties}") # Debug log
+    except Exception as e:
+        print(f"-- Tooltip Error fetching properties for {item_name}: {e}")
+        properties = None
+
     if properties:
-        tooltip = "<html><body><table>"
-        tooltip += f"<tr><th colspan='2'>{item_name}</th></tr>"
-        
-        for key, value in properties.items():
-            if key != "color":  # Skip color property
-                tooltip += f"<tr><td>{key}</td><td>{value}</td></tr>"
-                
+        tooltip = "<html><body><table border='1' cellspacing='0' cellpadding='3'>"
+        tooltip += f"<tr><th colspan='2' style='background-color:#f0f0f0;'>{item_name}</th></tr>"
+
+        # Sort properties alphabetically for consistent order
+        sorted_props = sorted(properties.items())
+
+        for key, value in sorted_props:
+            if key != "color":  # Skip color property in text
+                # Escape HTML special characters in key and value
+                import html
+                safe_key = html.escape(str(key).capitalize())
+                safe_value = html.escape(str(value))
+                tooltip += f"<tr><td>{safe_key}</td><td>{safe_value}</td></tr>"
+
         tooltip += "</table></body></html>"
-        
+
         item.setToolTip(tooltip)
     else:
-        item.setToolTip("")
+        item.setToolTip(f"{item_name} (No properties available)")
 
 def refresh_registry(self):
     for reg_type, categories in self.registry_lists.items():

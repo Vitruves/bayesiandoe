@@ -22,22 +22,31 @@ class ChemicalParameter:
         
     def _apply_logical_unit_defaults(self):
         """Apply logical unit defaults based on parameter name"""
-        if self.low is not None and self.high is not None and self.low != 0 and self.high != 1:
-            # Skip if ranges are already set to non-default values
+        # Only apply if range is default (None or 0/1) AND not already initialized for this name
+        should_apply = (
+            (self.low is None or self.low == 0) and
+            (self.high is None or self.high == 1) and
+            (self.name.lower() not in self.initialized_defaults)
+        )
+
+        if not should_apply:
+            # If range is already set, still add to initialized_defaults if not present
+            if self.name.lower() not in self.initialized_defaults:
+                 self.initialized_defaults.add(self.name.lower())
             return
-            
+
         rounding_config = settings.get_parameter_rounding(self.name, self.param_type)
         if rounding_config and "min" in rounding_config and "max" in rounding_config:
-            # Apply defaults from settings
+            # Apply defaults from settings only if they are still default
             if self.low is None or self.low == 0:
                 self.low = rounding_config["min"]
             if self.high is None or self.high == 1:
                 self.high = rounding_config["max"]
-            
+
             # Update units if they're not already set
             if self.units is None and "unit" in rounding_config:
                 self.units = rounding_config["unit"]
-                
+
             # Add parameter name to the initialized set
             self.initialized_defaults.add(self.name.lower())
         
@@ -183,6 +192,10 @@ class ChemicalParameter:
                     # Ensure value stays within bounds after rounding
                     value = max(self.low, min(self.high, value))
             
+            # Force integer conversion for discrete parameters
+            if self.param_type == "discrete" and value is not None:
+                value = int(value)
+                
             return value
         elif self.param_type == "categorical":
             return self.suggest_categorical_value()
@@ -240,6 +253,10 @@ class ChemicalParameter:
                 
                 # Sample from truncated normal distribution
                 value = stats.truncnorm.rvs(a, b, loc=self.prior_mean, scale=self.prior_std, size=1)[0]
+                
+                # For discrete parameters, round immediately to ensure integer
+                if self.param_type == "discrete":
+                    value = int(round(value))
             except ImportError:
                 # Fallback without scipy
                 import random
@@ -254,6 +271,10 @@ class ChemicalParameter:
                     
                     # Scale and shift
                     value = z0 * self.prior_std + self.prior_mean
+                    
+                    # For discrete parameters, round immediately
+                    if self.param_type == "discrete":
+                        value = int(round(value))
                     
                     # Limit rejection attempts
                     if random.random() < 0.05:  # 5% chance to give up and use uniform

@@ -138,30 +138,10 @@ class BayesianDOEApp(QMainWindow):
         # Add tab change handler to update the UI when switching tabs
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
         
-        # Add validation button
-        validate_button = QPushButton("Validate Setup & Continue ➔")
-        validate_button.setStyleSheet("""
-            QPushButton {
-                background-color: #e67e22;
-                color: white;
-                border-radius: 5px;
-                padding: 8px 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #d35400;
-            }
-            QPushButton:disabled {
-                background-color: #bdc3c7;
-            }
-        """)
-        validate_button.clicked.connect(self.validate_setup)
-        self.tab_widget.setCornerWidget(validate_button, Qt.TopRightCorner)
-        self.validate_button = validate_button  # Store reference for later
-        
         # Initialize setup validation state
         self.setup_validated = False
         self.disable_tabs()
+        self.on_tab_changed(0) # Ensure button state is correct initially
         
         self.log(" Application interface ready")
     
@@ -317,21 +297,30 @@ class BayesianDOEApp(QMainWindow):
         for i in range(self.tab_widget.count()):
             self.tab_widget.setTabEnabled(i, True)
         
-        # Update button to show validated status
-        self.validate_button.setText("✓ Setup Validated")
-        self.validate_button.setStyleSheet("""
-            QPushButton {
-                background-color: #2ecc71;
-                color: white;
-                border-radius: 5px;
-                padding: 8px 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #27ae60;
-            }
-        """)
-        self.validate_button.setEnabled(False)
+        # Find the validate button and update its state
+        validate_button = self.findChild(QPushButton, "ValidateButton")
+        if validate_button:
+            validate_button.setText("✓ Setup Validated")
+            validate_button.setStyleSheet("""
+                QPushButton#ValidateButton {
+                    background-color: #2ecc71;
+                    color: white;
+                    border-radius: 5px;
+                    padding: 10px 20px;
+                    font-weight: bold;
+                    font-size: 14px;
+                    margin-top: 10px;
+                }
+                QPushButton#ValidateButton:hover {
+                    background-color: #27ae60;
+                }
+                QPushButton#ValidateButton:disabled {
+                    background-color: #2ecc71; /* Keep green when disabled after validation */
+                    color: white;
+                }
+            """)
+            validate_button.setEnabled(False)
+            validate_button.setVisible(False) # Hide after validation
         
         # Show success message
         self.log(" Experiment setup validated - Success")
@@ -343,6 +332,15 @@ class BayesianDOEApp(QMainWindow):
 
     def on_tab_changed(self, index):
         """Load tab contents when user switches to that tab, with auto-refresh"""
+        # Show/hide validate button based on current tab
+        validate_button = self.findChild(QPushButton, "ValidateButton")
+        if validate_button:
+            # Only show validation button on setup tab (index 0) if not validated
+            if index == 0 and not self.setup_validated:
+                validate_button.setVisible(True)
+            else:
+                validate_button.setVisible(False)
+                
         # Prior Knowledge tab is typically index 1
         if index == 1:  # Prior Knowledge tab
             self.update_prior_tab()

@@ -237,21 +237,22 @@ def plot_response_surface(model, x_param, y_param, obj, gp_model=None, ax=None):
         z_data = []
         
         for exp in model.experiments:
-            if x_param in exp and y_param in exp and obj in exp:
-                x_val = exp[x_param]
-                y_val = exp[y_param]
-                
-                if model.parameters[x_param].param_type == "categorical":
-                    choices = model.parameters[x_param].choices
-                    x_val = choices.index(x_val) if x_val in choices else 0
+            if 'params' in exp and 'results' in exp and obj in exp['results']:
+                if x_param in exp['params'] and y_param in exp['params']:
+                    x_val = exp['params'][x_param]
+                    y_val = exp['params'][y_param]
                     
-                if model.parameters[y_param].param_type == "categorical":
-                    choices = model.parameters[y_param].choices
-                    y_val = choices.index(y_val) if y_val in choices else 0
-                    
-                x_data.append(float(x_val))
-                y_data.append(float(y_val))
-                z_data.append(float(exp[obj]) * 100.0)
+                    if model.parameters[x_param].param_type == "categorical":
+                        choices = model.parameters[x_param].choices
+                        x_val = choices.index(x_val) if x_val in choices else 0
+                        
+                    if model.parameters[y_param].param_type == "categorical":
+                        choices = model.parameters[y_param].choices
+                        y_val = choices.index(y_val) if y_val in choices else 0
+                        
+                    x_data.append(float(x_val))
+                    y_data.append(float(y_val))
+                    z_data.append(float(exp['results'][obj]) * 100.0)
                 
         if len(x_data) < 4:
             ax.text2D(0.5, 0.5, "Need at least 4 data points for surface plot", 
@@ -294,7 +295,7 @@ def plot_response_surface(model, x_param, y_param, obj, gp_model=None, ax=None):
                  if p_name == x_param or p_name == y_param:
                      continue # Placeholder
                  
-                 vals = [exp['params'][p_name] for exp in model.experiments if p_name in exp['params']]
+                 vals = [exp['params'][p_name] for exp in model.experiments if 'params' in exp and p_name in exp['params']]
                  if not vals:
                      # Use default if no data
                      fixed_val = p_obj.low + (p_obj.high - p_obj.low) / 2 if p_obj.param_type != "categorical" else p_obj.choices[0]
@@ -316,34 +317,37 @@ def plot_response_surface(model, x_param, y_param, obj, gp_model=None, ax=None):
 
             # Prepare grid features for prediction
             X_pred = []
-            feature_len = len(model._normalize_params(model.experiments[0]['params'])) # Get expected feature length
+            if model.experiments and 'params' in model.experiments[0]:
+                feature_len = len(model._normalize_params(model.experiments[0]['params']))
             
-            for gx, gy in zip(xi_mesh.ravel(), yi_mesh.ravel()):
-                current_params = fixed_params.copy()
-                current_params[x_param] = gx
-                current_params[y_param] = gy
-                normalized_features = model._normalize_params(current_params)
+                for gx, gy in zip(xi_mesh.ravel(), yi_mesh.ravel()):
+                    current_params = fixed_params.copy()
+                    current_params[x_param] = gx
+                    current_params[y_param] = gy
+                    normalized_features = model._normalize_params(current_params)
+                    
+                    # Ensure feature vector length matches training data
+                    if len(normalized_features) == feature_len:
+                        X_pred.append(normalized_features)
+                    else:
+                        # Handle potential length mismatch (e.g., due to categorical encoding issues)
+                        print(f"Warning: Feature length mismatch in surface plot. Expected {feature_len}, got {len(normalized_features)}")
+                        # Append a zero vector or handle appropriately
+                        X_pred.append([0.0] * feature_len) 
                 
-                # Ensure feature vector length matches training data
-                if len(normalized_features) == feature_len:
-                    X_pred.append(normalized_features)
+                X_pred = np.array(X_pred)
+                
+                if X_pred.shape[0] > 0:
+                     zi, std_zi = gp_model.predict(X_pred, return_std=True)
+                     zi = zi.reshape(xi_mesh.shape)
+                     zi = np.clip(zi, 0, 100) # Clip predictions to valid range
                 else:
-                    # Handle potential length mismatch (e.g., due to categorical encoding issues)
-                    print(f"Warning: Feature length mismatch in surface plot. Expected {feature_len}, got {len(normalized_features)}")
-                    # Append a zero vector or handle appropriately
-                    X_pred.append([0.0] * feature_len) 
-            
-            X_pred = np.array(X_pred)
-            
-            if X_pred.shape[0] > 0:
-                 zi, std_zi = gp_model.predict(X_pred, return_std=True)
-                 zi = zi.reshape(xi_mesh.shape)
-                 zi = np.clip(zi, 0, 100) # Clip predictions to valid range
+                     # Fallback if feature preparation failed
+                     print("Warning: Could not prepare features for GP prediction in surface plot. Falling back.")
+                     zi = griddata((x_data, y_data), z_data, (xi_mesh, yi_mesh), method='cubic', fill_value=np.mean(z_data))
             else:
-                 # Fallback if feature preparation failed
-                 print("Warning: Could not prepare features for GP prediction in surface plot. Falling back.")
-                 zi = griddata((x_data, y_data), z_data, (xi_mesh, yi_mesh), method='cubic', fill_value=np.mean(z_data))
-
+                # No valid experiment data
+                zi = griddata((x_data, y_data), z_data, (xi_mesh, yi_mesh), method='cubic', fill_value=np.mean(z_data))
         else:
              # Fallback to griddata if no GP model
             zi = griddata((x_data, y_data), z_data, (xi_mesh, yi_mesh), method='cubic', fill_value=np.mean(z_data))

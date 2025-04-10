@@ -32,10 +32,127 @@ from .widgets import (
     ExperimentTable, BestResultsTable, AllResultsTable, ParameterTable
 )
 
+# Move objective helper functions to module level
+def add_objective(self):
+    obj_name = self.objective_input.currentText().strip().lower()
+    weight = self.objective_weight.value()
+
+    if obj_name:
+        # Check if objective already exists
+        for i in range(self.objectives_list.count()):
+            text = self.objectives_list.item(i).text()
+            if text.startswith(obj_name + " "):
+                return  # Already exists
+
+        # Add to list
+        item = QListWidgetItem(f"{obj_name} [{weight:.1f}]")
+        self.objectives_list.addItem(item)
+        self.objectives_list.scrollToItem(item)
+
+        # Clear input field for next entry
+        self.objective_input.setCurrentText("")
+        self.objective_input.setFocus()
+
+def remove_objective(self):
+    selected_items = self.objectives_list.selectedItems()
+    if selected_items and self.objectives_list.count() > 1:  # Keep at least one objective
+        for item in selected_items:
+            self.objectives_list.takeItem(self.objectives_list.row(item))
+
+def show_quick_add_objectives(self):
+    """Show popup menu with common objective combinations"""
+    from PySide6.QtWidgets import QMenu
+    from PySide6.QtCore import QPoint
+
+    menu = QMenu(self)
+    menu.setStyleSheet("""
+        QMenu {
+            background-color: #f8f9fa;
+            border: 1px solid #ced4da;
+        }
+        QMenu::item {
+            padding: 6px 20px;
+        }
+        QMenu::item:selected {
+            background-color: #4dabf7;
+            color: white;
+        }
+    """)
+
+    # Add common objective combinations
+    action1 = menu.addAction("Yield Only")
+    action2 = menu.addAction("Yield + Selectivity")
+    action3 = menu.addAction("Yield + Purity")
+    action4 = menu.addAction("Yield + ee (Enantioselectivity)")
+    action5 = menu.addAction("Yield + Time + Cost")
+
+    # Connect actions to handlers
+    action1.triggered.connect(lambda: self.apply_objective_preset(["yield"]))
+    action2.triggered.connect(lambda: self.apply_objective_preset(["yield", "selectivity"]))
+    action3.triggered.connect(lambda: self.apply_objective_preset(["yield", "purity"]))
+    action4.triggered.connect(lambda: self.apply_objective_preset(["yield", "ee"]))
+    action5.triggered.connect(lambda: self.apply_objective_preset(["yield", "time", "cost"]))
+
+    # Show the menu
+    menu.exec(self.mapToGlobal(QPoint(
+        self.objectives_list.x() + self.objectives_list.width()//2,
+        self.objectives_list.y() + self.objectives_list.height()//2
+    )))
+
+def apply_objective_preset(self, objectives):
+    """Apply a preset of objectives with default weights"""
+    # Clear existing objectives
+    self.objectives_list.clear()
+
+    # Set weights based on number of objectives (simple normalization)
+    weight = 1.0
+    if len(objectives) > 1:
+        # Primary objective has more weight
+        weights = [2.0] + [1.0] * (len(objectives) - 1)
+        # Normalize to sum to number of objectives
+        total = sum(weights)
+        weights = [w * len(objectives) / total for w in weights]
+    else:
+        weights = [1.0]
+
+    # Add objectives with weights
+    for obj, weight in zip(objectives, weights):
+        self.objectives_list.addItem(f"{obj} [{weight:.1f}]")
+
+    # Auto-apply objectives
+    update_objectives(self)
+
+# Keyboard shortcut helper function (also at module level)
+def handle_objective_return_key(self, event):
+    if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+        self.add_objective()
+        return True
+    return False
+
+# Function to get objectives from the list (module level)
+def get_objectives_from_list(self):
+    objectives = {}
+    for i in range(self.objectives_list.count()):
+        text = self.objectives_list.item(i).text()
+        parts = text.split("[")
+        if len(parts) == 2:
+            obj_name = parts[0].strip()
+            weight_str = parts[1].replace("]", "").strip()
+            try:
+                weight = float(weight_str)
+                objectives[obj_name] = weight
+            except ValueError:
+                pass
+    return objectives
+
 def setup_setup_tab(self):
     setup_tab = QWidget()
-    layout = QHBoxLayout(setup_tab)
-    
+    # Change main layout to QVBoxLayout to stack panels and button
+    main_layout = QVBoxLayout(setup_tab)
+
+    # Create the horizontal layout for the panels
+    panels_layout = QHBoxLayout()
+
     left_panel = QVBoxLayout()
     
     param_group = QGroupBox("Reaction Parameters")
@@ -351,136 +468,51 @@ def setup_setup_tab(self):
     
     right_panel.addWidget(objectives_group)
     
-    # Make registry taller by adjusting relative layout proportions
-    layout.addLayout(left_panel, 65)
-    layout.addLayout(right_panel, 35)
-    
-    # Add objective manipulation methods to the main app class
-    def add_objective(self):
-        obj_name = self.objective_input.currentText().strip().lower()
-        weight = self.objective_weight.value()
-        
-        if obj_name:
-            # Check if objective already exists
-            for i in range(self.objectives_list.count()):
-                text = self.objectives_list.item(i).text()
-                if text.startswith(obj_name + " "):
-                    return  # Already exists
-                    
-            # Add to list
-            item = QListWidgetItem(f"{obj_name} [{weight:.1f}]")
-            self.objectives_list.addItem(item)
-            self.objectives_list.scrollToItem(item)
-            
-            # Clear input field for next entry
-            self.objective_input.setCurrentText("")
-            self.objective_input.setFocus()
-    
-    def remove_objective(self):
-        selected_items = self.objectives_list.selectedItems()
-        if selected_items and self.objectives_list.count() > 1:  # Keep at least one objective
-            for item in selected_items:
-                self.objectives_list.takeItem(self.objectives_list.row(item))
-    
-    def show_quick_add_objectives(self):
-        """Show popup menu with common objective combinations"""
-        from PySide6.QtWidgets import QMenu
-        from PySide6.QtCore import QPoint
-        
-        menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #f8f9fa;
-                border: 1px solid #ced4da;
-            }
-            QMenu::item {
-                padding: 6px 20px;
-            }
-            QMenu::item:selected {
-                background-color: #4dabf7;
-                color: white;
-            }
-        """)
-        
-        # Add common objective combinations
-        action1 = menu.addAction("Yield Only")
-        action2 = menu.addAction("Yield + Selectivity")
-        action3 = menu.addAction("Yield + Purity")
-        action4 = menu.addAction("Yield + ee (Enantioselectivity)")
-        action5 = menu.addAction("Yield + Time + Cost")
-        
-        # Connect actions to handlers
-        action1.triggered.connect(lambda: self.apply_objective_preset(["yield"]))
-        action2.triggered.connect(lambda: self.apply_objective_preset(["yield", "selectivity"]))
-        action3.triggered.connect(lambda: self.apply_objective_preset(["yield", "purity"]))
-        action4.triggered.connect(lambda: self.apply_objective_preset(["yield", "ee"]))
-        action5.triggered.connect(lambda: self.apply_objective_preset(["yield", "time", "cost"]))
-        
-        # Show the menu
-        menu.exec(self.mapToGlobal(QPoint(
-            self.objectives_list.x() + self.objectives_list.width()//2, 
-            self.objectives_list.y() + self.objectives_list.height()//2
-        )))
-    
-    def apply_objective_preset(self, objectives):
-        """Apply a preset of objectives with default weights"""
-        # Clear existing objectives
-        self.objectives_list.clear()
-        
-        # Set weights based on number of objectives (simple normalization)
-        weight = 1.0
-        if len(objectives) > 1:
-            # Primary objective has more weight
-            weights = [2.0] + [1.0] * (len(objectives) - 1)
-            # Normalize to sum to number of objectives
-            total = sum(weights)
-            weights = [w * len(objectives) / total for w in weights]
-        else:
-            weights = [1.0]
-            
-        # Add objectives with weights
-        for obj, weight in zip(objectives, weights):
-            self.objectives_list.addItem(f"{obj} [{weight:.1f}]")
-            
-        # Auto-apply objectives
-        update_objectives(self)
-    
-    # Keyboard shortcut for adding objectives
-    def handle_objective_return_key(self, event):
-        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
-            self.add_objective()
-            return True
-        return False
-        
-    # Add key event filter to input field
-    self.objective_input.keyPressEvent = lambda event: (
-        handle_objective_return_key(self, event) or 
-        type(self.objective_input).keyPressEvent(self.objective_input, event)
-    )
-    
+    # Add panels to the horizontal layout
+    panels_layout.addLayout(left_panel, 65)
+    panels_layout.addLayout(right_panel, 35)
+
+    # Add the panels layout to the main vertical layout
+    main_layout.addLayout(panels_layout)
+
+    # Add the validation button at the bottom of the main vertical layout
+    self.validate_button = QPushButton("Validate Setup & Continue ➔")
+    self.validate_button.setObjectName("ValidateButton") # Add object name for easier access
+    self.validate_button.setStyleSheet("""
+        QPushButton#ValidateButton {
+            background-color: #e67e22;
+            color: white;
+            border-radius: 5px;
+            padding: 10px 20px; /* Make slightly larger */
+            font-weight: bold;
+            font-size: 14px; /* Make font slightly larger */
+            margin-top: 10px; /* Add some space above */
+        }
+        QPushButton#ValidateButton:hover {
+            background-color: #d35400;
+        }
+        QPushButton#ValidateButton:disabled {
+            background-color: #bdc3c7;
+            color: #7f8c8d;
+        }
+    """)
+    self.validate_button.clicked.connect(self.validate_setup)
+    # Add button to the main layout (QVBoxLayout)
+    main_layout.addWidget(self.validate_button)
+
     # Attach methods to the instance
     self.add_objective = add_objective.__get__(self)
     self.remove_objective = remove_objective.__get__(self)
     self.show_quick_add_objectives = show_quick_add_objectives.__get__(self)
     self.apply_objective_preset = apply_objective_preset.__get__(self)
     
-    # Override the objectives table access for update_objectives
-    def get_objectives_from_list(self):
-        objectives = {}
-        for i in range(self.objectives_list.count()):
-            text = self.objectives_list.item(i).text()
-            parts = text.split("[")
-            if len(parts) == 2:
-                obj_name = parts[0].strip()
-                weight_str = parts[1].replace("]", "").strip()
-                try:
-                    weight = float(weight_str)
-                    objectives[obj_name] = weight
-                except ValueError:
-                    pass
-        return objectives
-    
-    # Attach to the instance
+    # Add key event filter to input field using the module-level handler
+    self.objective_input.keyPressEvent = lambda event: (
+        handle_objective_return_key(self, event) or
+        type(self.objective_input).keyPressEvent(self.objective_input, event)
+    )
+
+    # Attach the get_objectives_from_list method
     self.get_objectives_from_list = get_objectives_from_list.__get__(self)
     
     self.tab_widget.addTab(setup_tab, "Experiment Setup")

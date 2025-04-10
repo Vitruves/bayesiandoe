@@ -781,26 +781,56 @@ def add_result_for_selected(self):
 
 def new_project(self):
     confirm = QMessageBox.question(
-        self, 
-        "Confirm New Project", 
+        self,
+        "Confirm New Project",
         "Creating a new project will discard all current data. Continue?",
-        QMessageBox.Yes | QMessageBox.No, 
+        QMessageBox.Yes | QMessageBox.No,
         QMessageBox.No
     )
-    
+
     if confirm == QMessageBox.Yes:
         self.model = OptunaBayesianExperiment()
-        self.current_round = 0
+        self.current_round = 1 # Reset to 1
         self.round_start_indices = []
         self.working_directory = os.getcwd()
-        
+
+        # Reset setup validation state
+        self.setup_validated = False
+
+        # Find and reset the validate button
+        validate_button = self.findChild(QPushButton, "ValidateButton")
+        if validate_button:
+            validate_button.setText("Validate Setup & Continue ➔")
+            validate_button.setStyleSheet(""" /* Use original stylesheet */
+                QPushButton#ValidateButton {
+                    background-color: #e67e22;
+                    color: white;
+                    border-radius: 5px;
+                    padding: 10px 20px;
+                    font-weight: bold;
+                    font-size: 14px;
+                    margin-top: 10px;
+                }
+                QPushButton#ValidateButton:hover {
+                    background-color: #d35400;
+                }
+                QPushButton#ValidateButton:disabled {
+                    background-color: #bdc3c7;
+                    color: #7f8c8d;
+                }
+            """)
+            validate_button.setEnabled(True)
+            validate_button.setVisible(True) # Ensure it's visible initially on setup tab
+
         # Explicitly update columns on tables first
         self.experiment_table.update_columns(self.model)
         if hasattr(self, 'best_table'):
             self.best_table.update_columns(self.model)
-            
+
         update_ui_from_model(self)
-        self.tab_widget.setCurrentIndex(0)
+        self.tab_widget.setCurrentIndex(0) # Go to setup tab
+        self.disable_tabs() # Disable tabs until validated
+        self.on_tab_changed(0) # Update button visibility explicitly
         log(self, " New project created - Success")
 
 def open_project(self):

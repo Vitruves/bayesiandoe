@@ -31,7 +31,7 @@ class SplashScreen(QSplashScreen):
         
         self.progress = 0
         self.counter = 0
-        self.duration_ms = 2000  # Reduced minimum display time
+        self.duration_ms = 5000  # Reduced minimum display time
         self.start_time = time.time()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
