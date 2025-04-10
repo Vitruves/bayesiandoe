@@ -781,19 +781,19 @@ def add_result_for_selected(self):
 
 def new_project(self):
     confirm = QMessageBox.question(
-        self,
-        "Confirm New Project",
+        self, 
+        "Confirm New Project", 
         "Creating a new project will discard all current data. Continue?",
-        QMessageBox.Yes | QMessageBox.No,
+        QMessageBox.Yes | QMessageBox.No, 
         QMessageBox.No
     )
-
+    
     if confirm == QMessageBox.Yes:
         self.model = OptunaBayesianExperiment()
         self.current_round = 1 # Reset to 1
         self.round_start_indices = []
         self.working_directory = os.getcwd()
-
+        
         # Reset setup validation state
         self.setup_validated = False
 
@@ -826,7 +826,7 @@ def new_project(self):
         self.experiment_table.update_columns(self.model)
         if hasattr(self, 'best_table'):
             self.best_table.update_columns(self.model)
-
+            
         update_ui_from_model(self)
         self.tab_widget.setCurrentIndex(0) # Go to setup tab
         self.disable_tabs() # Disable tabs until validated

@@ -7,6 +7,7 @@ from PySide6.QtGui import QColor
 from .ui_utils import log, update_ui_from_model, update_prior_table
 from .ui_visualization import update_prior_plot
 from .dialogs import PriorDialog, ParameterLinkDialog
+from PySide6.QtCore import Qt
 
 def update_objectives(self):
     """Update the objectives and weights from the UI controls"""
@@ -52,18 +53,22 @@ def show_registry_item_tooltip(self, item, reg_type, category):
     if not item:
         return
 
-    item_name = item.text()
+    # Retrieve the original item name from item data
+    original_item_name = item.data(Qt.UserRole)
+    if not original_item_name:
+        original_item_name = item.text().split(' (')[0] # Fallback if data not set
+
     # Add logging here to check fetched properties
     try:
-        properties = self.registry_manager.get_item_properties(reg_type, category, item_name)
-        print(f"-- Tooltip Check: Item='{item_name}', Type='{reg_type}', Cat='{category}', Props={properties}") # Debug log
+        properties = self.registry_manager.get_item_properties(reg_type, category, original_item_name)
+        print(f"-- Tooltip Check: Item='{original_item_name}', Type='{reg_type}', Cat='{category}', Props={properties}") # Debug log
     except Exception as e:
-        print(f"-- Tooltip Error fetching properties for {item_name}: {e}")
+        print(f"-- Tooltip Error fetching properties for {original_item_name}: {e}")
         properties = None
 
     if properties:
         tooltip = "<html><body><table border='1' cellspacing='0' cellpadding='3'>"
-        tooltip += f"<tr><th colspan='2' style='background-color:#f0f0f0;'>{item_name}</th></tr>"
+        tooltip += f"<tr><th colspan='2' style='background-color:#f0f0f0;'>{original_item_name}</th></tr>"
 
         # Sort properties alphabetically for consistent order
         sorted_props = sorted(properties.items())
@@ -80,27 +85,32 @@ def show_registry_item_tooltip(self, item, reg_type, category):
 
         item.setToolTip(tooltip)
     else:
-        item.setToolTip(f"{item_name} (No properties available)")
+        item.setToolTip(f"{original_item_name} (No properties available)")
 
 def refresh_registry(self):
     for reg_type, categories in self.registry_lists.items():
         for category, list_widget in categories.items():
             list_widget.clear()
-            
+
             items = self.registry_manager.get_item_names(reg_type, category)
-            
+
             for item_name in items:
-                list_item = QListWidgetItem(item_name)
+                # Get the display name with the key property
+                display_name = self.registry_manager.get_item_display_name(reg_type, category, item_name)
+                list_item = QListWidgetItem(display_name)
+                # Store the original name for property lookup
+                list_item.setData(Qt.UserRole, item_name)
                 list_widget.addItem(list_item)
-                
+
                 props = self.registry_manager.get_item_properties(reg_type, category, item_name)
                 if props:
-                    tooltip = "\n".join([f"{k}: {v}" for k, v in props.items() if k != "color"])
-                    list_item.setToolTip(tooltip)
-                    
+                    # Tooltip formatting moved to show_registry_item_tooltip
                     if "color" in props:
                         color_name = props["color"]
-                        list_item.setForeground(QColor(color_name))
+                        try:
+                            list_item.setForeground(QColor(color_name))
+                        except Exception as e:
+                            print(f"Error setting color '{color_name}' for {item_name}: {e}")
 
 def on_prior_selected(self):
     selected_items = self.prior_table.selectedItems()
