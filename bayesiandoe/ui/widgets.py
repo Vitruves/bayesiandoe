@@ -2,6 +2,7 @@ import time
 import random
 import logging
 import numpy as np
+import concurrent.futures
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QRect
 from PySide6.QtGui import QPixmap, QFont, QIcon, QColor, QPainter, QBrush, QPen, QLinearGradient, QImage
 from PySide6.QtWidgets import (
@@ -30,7 +31,7 @@ class SplashScreen(QSplashScreen):
         
         self.progress = 0
         self.counter = 0
-        self.duration_ms = 3000  # Minimum 3 seconds display time
+        self.duration_ms = 2000  # Reduced minimum display time
         self.start_time = time.time()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
@@ -39,33 +40,36 @@ class SplashScreen(QSplashScreen):
         # Initialize system details
         self.system_details = "Detecting system..."
         
-        # Initialize packages to load
-        self.packages_to_load = [
+        # Define essential and non-essential packages
+        self.essential_packages = [
             ("numpy", "Loading numerical routines"),
             ("pandas", "Loading data structures"),
+            ("PySide6", "Initializing UI components")
+        ]
+        
+        self.nonessential_packages = [
             ("matplotlib", "Loading visualization libraries"),
             ("scipy", "Loading scientific computing libraries"),
             ("optuna", "Loading optimization framework"),
-            ("sklearn", "Loading machine learning libraries"),
-            ("torch", "Loading deep learning libraries"),
-            ("PySide6", "Initializing UI components")
+            ("sklearn", "Loading machine learning libraries")
         ]
+        
+        # Package loading state
         self.current_package_index = 0
         self.package_loading_complete = False
+        self.essential_loading_complete = False
         self.loaded_packages = 0
         self.missing_packages = []
         
-        # Start package loading thread
-        import threading
-        self.loading_thread = threading.Thread(target=self.load_packages)
-        self.loading_thread.daemon = True
-        self.loading_thread.start()
+        # Start package loading threads
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        self.load_essential_future = self.executor.submit(self.load_essential_packages)
         
+        # Draw initial splash screen immediately
         self.draw_splash()
     
-    def load_packages(self):
-        """Background thread to load packages"""
-        # Add system details
+    def load_essential_packages(self):
+        """Load essential packages first in parallel"""
         try:
             import platform
             system_info = f"{platform.system()} {platform.release()}"
@@ -74,13 +78,13 @@ class SplashScreen(QSplashScreen):
         except:
             self.system_details = "System info unavailable"
             
-        # Load required packages
+        # Load essential packages
         loaded_count = 0
         missing_packages = []
-        for i, (package, message) in enumerate(self.packages_to_load):
+        
+        for i, (package, message) in enumerate(self.essential_packages):
             try:
                 self.current_package_index = i
-                start_time = time.time()
                 
                 # Import the package
                 module = __import__(package)
@@ -88,27 +92,55 @@ class SplashScreen(QSplashScreen):
                 # Get version if available
                 try:
                     version = getattr(module, '__version__', 'unknown')
-                    self.packages_to_load[i] = (package, f"{message} ({version})")
+                    self.essential_packages[i] = (package, f"{message} ({version})")
                 except:
                     pass
                 
-                # Ensure each package load is visible for at least 0.2 seconds
-                elapsed = time.time() - start_time
-                if elapsed < 0.2:
-                    time.sleep(0.2 - elapsed)
+                loaded_count += 1
+            except ImportError:
+                missing_packages.append(package)
+        
+        # Update the loaded package count
+        self.loaded_packages = loaded_count
+        self.missing_packages.extend(missing_packages)
+        
+        self.essential_loading_complete = True
+        
+        # Start loading non-essential packages
+        self.nonessential_future = self.executor.submit(self.load_nonessential_packages)
+        
+        return loaded_count, missing_packages
+    
+    def load_nonessential_packages(self):
+        """Load non-essential packages after essential ones are loaded"""
+        loaded_count = 0
+        missing_packages = []
+        
+        offset = len(self.essential_packages)
+        for i, (package, message) in enumerate(self.nonessential_packages):
+            try:
+                self.current_package_index = offset + i
+                
+                # Import the package
+                module = __import__(package)
+                
+                # Get version if available
+                try:
+                    version = getattr(module, '__version__', 'unknown')
+                    self.nonessential_packages[i] = (package, f"{message} ({version})")
+                except:
+                    pass
                 
                 loaded_count += 1
             except ImportError:
-                # Track missing packages
                 missing_packages.append(package)
-                # Continue with next package
-                pass
-                
-        # Log results for debugging
-        self.loaded_packages = loaded_count
-        self.missing_packages = missing_packages
-                
+        
+        # Update total package count
+        self.loaded_packages += loaded_count
+        self.missing_packages.extend(missing_packages)
+        
         self.package_loading_complete = True
+        return loaded_count, missing_packages
     
     def showEvent(self, event):
         super().showEvent(event)
@@ -119,18 +151,26 @@ class SplashScreen(QSplashScreen):
         
         # Calculate progress based on package loading and elapsed time
         if self.package_loading_complete:
-            # If packages are loaded but minimum time not reached, continue progress
+            # If all packages are loaded, complete the progress
             time_progress = min(int(elapsed_time / self.duration_ms * 100), 100)
             self.progress = time_progress
+        elif self.essential_loading_complete:
+            # If essential packages loaded but non-essential still loading
+            essential_weight = 0.6  # Essential packages are 60% of progress
+            nonessential_progress = int((self.current_package_index - len(self.essential_packages) + 1) / 
+                                       len(self.nonessential_packages) * (100 - essential_weight * 100))
+            self.progress = int(essential_weight * 100) + nonessential_progress
         else:
-            # During package loading, base progress on package index
-            package_progress = int((self.current_package_index + 1) / len(self.packages_to_load) * 80)
-            self.progress = min(package_progress, 80)  # Cap at 80% until complete
+            # During essential package loading
+            self.progress = int((self.current_package_index + 1) / 
+                              len(self.essential_packages) * 60)  # Cap at 60% until essential complete
         
         self.counter += 1
         
         # Determine if we should continue showing the splash screen
-        should_continue = (elapsed_time < self.duration_ms) or not self.package_loading_complete
+        should_continue = ((elapsed_time < self.duration_ms) or 
+                          not self.essential_loading_complete or
+                          (not self.package_loading_complete and elapsed_time < 5000))  # 5s max wait time
         
         if should_continue:
             self.draw_splash()
@@ -138,7 +178,10 @@ class SplashScreen(QSplashScreen):
             if self.counter % 10 == 0:
                 self.raise_()
         else:
+            # Ensure all threads are properly cleaned up
             self.timer.stop()
+            if not self.executor.shutdown(wait=False):
+                self.executor.shutdown(wait=False)
             self.close()
         
     def draw_splash(self):
@@ -164,8 +207,9 @@ class SplashScreen(QSplashScreen):
         self.draw_cyber_progress(painter, rect)
         
         # Draw current loading message
-        if self.current_package_index < len(self.packages_to_load):
-            _, message = self.packages_to_load[self.current_package_index]
+        packages = self.essential_packages + self.nonessential_packages
+        if self.current_package_index < len(packages):
+            _, message = packages[self.current_package_index]
         else:
             message = "Finalizing initialization"
             
@@ -180,7 +224,7 @@ class SplashScreen(QSplashScreen):
         painter.setFont(font)
         painter.setPen(QColor(150, 170, 170))
         
-        painter.drawText(rect.adjusted(20, 0, 0, -15), Qt.AlignLeft | Qt.AlignBottom, "v1.0.5")
+        painter.drawText(rect.adjusted(20, 0, 0, -15), Qt.AlignLeft | Qt.AlignBottom, "v1.1.0")
         painter.drawText(rect.adjusted(0, 0, -20, -15), Qt.AlignRight | Qt.AlignBottom, "© 2025 Johan H.G. Natter")
         
         # Show system details
@@ -192,7 +236,7 @@ class SplashScreen(QSplashScreen):
         
         # Show loading stats in final phase
         if self.package_loading_complete:
-            stats_text = f"Loaded {self.loaded_packages}/{len(self.packages_to_load)} packages"
+            stats_text = f"Loaded {self.loaded_packages}/{len(self.essential_packages) + len(self.nonessential_packages)} packages"
             painter.drawText(rect.adjusted(0, 0, 0, -60), Qt.AlignHCenter | Qt.AlignBottom, stats_text)
         
         painter.end()

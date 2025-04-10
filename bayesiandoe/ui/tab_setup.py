@@ -122,6 +122,8 @@ def setup_setup_tab(self):
     registry_layout = QVBoxLayout(registry_group)
     
     self.registry_tabs = QTabWidget()
+    self.registry_tabs.setMinimumHeight(400)  # Set a minimum height for the registry tabs
+    
     self.registry_lists = {}
     self.registry_widgets = {}
     
@@ -140,6 +142,7 @@ def setup_setup_tab(self):
             list_widget = QListWidget()
             list_widget.setSelectionMode(QListWidget.ExtendedSelection)
             list_widget.setMouseTracking(True)
+            list_widget.setMinimumHeight(300)  # Make each list widget taller
             list_widget.itemEntered.connect(
                 lambda item, rt=reg_type, cat=category: show_registry_item_tooltip(self, item, rt, cat)
             )
@@ -184,28 +187,301 @@ def setup_setup_tab(self):
     objectives_group = QGroupBox("Optimization Objectives")
     objectives_layout = QVBoxLayout(objectives_group)
     
-    self.objectives_table = QTableWidget(3, 2)
-    self.objectives_table.setHorizontalHeaderLabels(["Objective", "Weight"])
-    self.objectives_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-    self.objectives_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+    # Replace with an enhanced objective input panel
+    obj_input_panel = QHBoxLayout()
     
-    self.objectives_table.setItem(0, 0, QTableWidgetItem("yield"))
-    self.objectives_table.setItem(0, 1, QTableWidgetItem("1.0"))
+    # Add preset objectives dropdown with styling
+    self.objective_input = QComboBox()
+    self.objective_input.setEditable(True)
+    self.objective_input.setPlaceholderText("Enter objective...")
+    self.objective_input.addItems(["yield", "selectivity", "purity", "conversion", "cost", "time", "ee", "dr", "sustainability"])
+    self.objective_input.setMinimumWidth(150)
+    self.objective_input.setStyleSheet("""
+        QComboBox {
+            background-color: #f8f9fa;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            padding: 4px 8px;
+        }
+        QComboBox:focus {
+            border: 1px solid #4dabf7;
+        }
+    """)
+    obj_input_panel.addWidget(self.objective_input, 1)
     
-    objectives_layout.addWidget(self.objectives_table)
+    # Weight input with better styling
+    weight_layout = QHBoxLayout()
+    weight_layout.addWidget(QLabel("Weight:"))
+    self.objective_weight = QDoubleSpinBox()
+    self.objective_weight.setRange(0.1, 10.0)
+    self.objective_weight.setValue(1.0)
+    self.objective_weight.setSingleStep(0.1)
+    self.objective_weight.setDecimals(1) 
+    self.objective_weight.setStyleSheet("""
+        QDoubleSpinBox {
+            background-color: #f8f9fa;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            padding: 4px;
+        }
+        QDoubleSpinBox:focus {
+            border: 1px solid #4dabf7;
+        }
+    """)
+    weight_layout.addWidget(self.objective_weight)
+    obj_input_panel.addLayout(weight_layout)
     
-    obj_buttons_layout = QHBoxLayout()
+    # Add button with improved styling
+    add_obj_btn = QPushButton("Add")
+    add_obj_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #4dabf7;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 12px;
+        }
+        QPushButton:hover {
+            background-color: #339af0;
+        }
+        QPushButton:pressed {
+            background-color: #228be6;
+        }
+    """)
+    add_obj_btn.clicked.connect(lambda: self.add_objective())
+    obj_input_panel.addWidget(add_obj_btn)
+    
+    objectives_layout.addLayout(obj_input_panel)
+    
+    # List of currently defined objectives with improved styling
+    objectives_list_layout = QVBoxLayout()
+    objectives_list_label = QLabel("Current Objectives:")
+    objectives_list_label.setStyleSheet("font-weight: bold;")
+    objectives_list_layout.addWidget(objectives_list_label)
+    
+    self.objectives_list = QListWidget()
+    self.objectives_list.setMaximumHeight(80)
+    self.objectives_list.setAlternatingRowColors(True)
+    self.objectives_list.setStyleSheet("""
+        QListWidget {
+            background-color: #f8f9fa;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+        }
+        QListWidget::item {
+            padding: 4px;
+        }
+        QListWidget::item:selected {
+            background-color: #4dabf7;
+            color: white;
+        }
+        QListWidget::item:alternate {
+            background-color: #e9ecef;
+        }
+    """)
+    
+    # Add initial objective
+    self.objectives_list.addItem("yield [1.0]")
+    objectives_list_layout.addWidget(self.objectives_list)
+    
+    # Action buttons
+    action_buttons = QHBoxLayout()
+    
+    remove_obj_btn = QPushButton("Remove Selected")
+    remove_obj_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #f03e3e;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 12px;
+        }
+        QPushButton:hover {
+            background-color: #e03131;
+        }
+        QPushButton:pressed {
+            background-color: #c92a2a;
+        }
+    """)
+    remove_obj_btn.clicked.connect(lambda: self.remove_objective())
     
     apply_obj_btn = QPushButton("Apply Objectives")
+    apply_obj_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #40c057;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 12px;
+        }
+        QPushButton:hover {
+            background-color: #37b24d;
+        }
+        QPushButton:pressed {
+            background-color: #2f9e44;
+        }
+    """)
     apply_obj_btn.clicked.connect(lambda: update_objectives(self))
-    obj_buttons_layout.addWidget(apply_obj_btn)
     
-    objectives_layout.addLayout(obj_buttons_layout)
+    # Quick add common combinations
+    quick_add_btn = QPushButton("Add Common Sets")
+    quick_add_btn.setStyleSheet("""
+        QPushButton {
+            background-color: #7950f2;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 6px 12px;
+        }
+        QPushButton:hover {
+            background-color: #6741d9;
+        }
+        QPushButton:pressed {
+            background-color: #5f3dc4;
+        }
+    """)
+    quick_add_btn.clicked.connect(lambda: self.show_quick_add_objectives())
+    
+    action_buttons.addWidget(remove_obj_btn)
+    action_buttons.addWidget(quick_add_btn)
+    action_buttons.addWidget(apply_obj_btn)
+    
+    objectives_list_layout.addLayout(action_buttons)
+    objectives_layout.addLayout(objectives_list_layout)
     
     right_panel.addWidget(objectives_group)
     
+    # Make registry taller by adjusting relative layout proportions
     layout.addLayout(left_panel, 65)
     layout.addLayout(right_panel, 35)
+    
+    # Add objective manipulation methods to the main app class
+    def add_objective(self):
+        obj_name = self.objective_input.currentText().strip().lower()
+        weight = self.objective_weight.value()
+        
+        if obj_name:
+            # Check if objective already exists
+            for i in range(self.objectives_list.count()):
+                text = self.objectives_list.item(i).text()
+                if text.startswith(obj_name + " "):
+                    return  # Already exists
+                    
+            # Add to list
+            item = QListWidgetItem(f"{obj_name} [{weight:.1f}]")
+            self.objectives_list.addItem(item)
+            self.objectives_list.scrollToItem(item)
+            
+            # Clear input field for next entry
+            self.objective_input.setCurrentText("")
+            self.objective_input.setFocus()
+    
+    def remove_objective(self):
+        selected_items = self.objectives_list.selectedItems()
+        if selected_items and self.objectives_list.count() > 1:  # Keep at least one objective
+            for item in selected_items:
+                self.objectives_list.takeItem(self.objectives_list.row(item))
+    
+    def show_quick_add_objectives(self):
+        """Show popup menu with common objective combinations"""
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtCore import QPoint
+        
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #f8f9fa;
+                border: 1px solid #ced4da;
+            }
+            QMenu::item {
+                padding: 6px 20px;
+            }
+            QMenu::item:selected {
+                background-color: #4dabf7;
+                color: white;
+            }
+        """)
+        
+        # Add common objective combinations
+        action1 = menu.addAction("Yield Only")
+        action2 = menu.addAction("Yield + Selectivity")
+        action3 = menu.addAction("Yield + Purity")
+        action4 = menu.addAction("Yield + ee (Enantioselectivity)")
+        action5 = menu.addAction("Yield + Time + Cost")
+        
+        # Connect actions to handlers
+        action1.triggered.connect(lambda: self.apply_objective_preset(["yield"]))
+        action2.triggered.connect(lambda: self.apply_objective_preset(["yield", "selectivity"]))
+        action3.triggered.connect(lambda: self.apply_objective_preset(["yield", "purity"]))
+        action4.triggered.connect(lambda: self.apply_objective_preset(["yield", "ee"]))
+        action5.triggered.connect(lambda: self.apply_objective_preset(["yield", "time", "cost"]))
+        
+        # Show the menu
+        menu.exec(self.mapToGlobal(QPoint(
+            self.objectives_list.x() + self.objectives_list.width()//2, 
+            self.objectives_list.y() + self.objectives_list.height()//2
+        )))
+    
+    def apply_objective_preset(self, objectives):
+        """Apply a preset of objectives with default weights"""
+        # Clear existing objectives
+        self.objectives_list.clear()
+        
+        # Set weights based on number of objectives (simple normalization)
+        weight = 1.0
+        if len(objectives) > 1:
+            # Primary objective has more weight
+            weights = [2.0] + [1.0] * (len(objectives) - 1)
+            # Normalize to sum to number of objectives
+            total = sum(weights)
+            weights = [w * len(objectives) / total for w in weights]
+        else:
+            weights = [1.0]
+            
+        # Add objectives with weights
+        for obj, weight in zip(objectives, weights):
+            self.objectives_list.addItem(f"{obj} [{weight:.1f}]")
+            
+        # Auto-apply objectives
+        update_objectives(self)
+    
+    # Keyboard shortcut for adding objectives
+    def handle_objective_return_key(self, event):
+        if event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            self.add_objective()
+            return True
+        return False
+        
+    # Add key event filter to input field
+    self.objective_input.keyPressEvent = lambda event: (
+        handle_objective_return_key(self, event) or 
+        type(self.objective_input).keyPressEvent(self.objective_input, event)
+    )
+    
+    # Attach methods to the instance
+    self.add_objective = add_objective.__get__(self)
+    self.remove_objective = remove_objective.__get__(self)
+    self.show_quick_add_objectives = show_quick_add_objectives.__get__(self)
+    self.apply_objective_preset = apply_objective_preset.__get__(self)
+    
+    # Override the objectives table access for update_objectives
+    def get_objectives_from_list(self):
+        objectives = {}
+        for i in range(self.objectives_list.count()):
+            text = self.objectives_list.item(i).text()
+            parts = text.split("[")
+            if len(parts) == 2:
+                obj_name = parts[0].strip()
+                weight_str = parts[1].replace("]", "").strip()
+                try:
+                    weight = float(weight_str)
+                    objectives[obj_name] = weight
+                except ValueError:
+                    pass
+        return objectives
+    
+    # Attach to the instance
+    self.get_objectives_from_list = get_objectives_from_list.__get__(self)
     
     self.tab_widget.addTab(setup_tab, "Experiment Setup")
 
@@ -327,6 +603,13 @@ def setup_experiment_tab(self):
     self.design_method_combo.setCurrentText("Latin Hypercube")
     initial_layout.addWidget(self.design_method_combo)
     
+    # Add help button for algorithm selection
+    help_btn = QPushButton("?")
+    help_btn.setMaximumWidth(30)
+    help_btn.setToolTip("Get help choosing the best algorithm")
+    help_btn.clicked.connect(lambda: self.on_menu_action("algorithm_help"))
+    initial_layout.addWidget(help_btn)
+    
     generate_btn = QPushButton("Generate Initial")
     generate_btn.clicked.connect(lambda: generate_initial_experiments(self))
     initial_layout.addWidget(generate_btn)
@@ -335,24 +618,67 @@ def setup_experiment_tab(self):
     
     # Next round group
     next_group = QGroupBox("Next Round")
-    next_layout = QHBoxLayout(next_group)
+    next_layout = QVBoxLayout(next_group)
     
-    next_layout.addWidget(QLabel("Number of Experiments:"))
+    # Add experiment count in a horizontal layout
+    exp_count_layout = QHBoxLayout()
+    exp_count_layout.addWidget(QLabel("Number of Experiments:"))
     self.n_next_spin = QSpinBox()
     self.n_next_spin.setRange(1, 50)
     self.n_next_spin.setValue(5)
-    next_layout.addWidget(self.n_next_spin)
+    exp_count_layout.addWidget(self.n_next_spin)
+    next_layout.addLayout(exp_count_layout)
     
-    next_layout.addWidget(QLabel("Exploration:"))
+    # Add exploration/exploitation slider in its own row for larger size
+    slider_layout = QVBoxLayout()
+    slider_label_layout = QHBoxLayout()
+    slider_label_layout.addWidget(QLabel("Exploration"))
+    slider_label_layout.addStretch(1)
+    slider_label_layout.addWidget(QLabel("Exploitation"))
+    slider_layout.addLayout(slider_label_layout)
+    
     self.exploit_slider = QSlider(Qt.Horizontal)
     self.exploit_slider.setRange(0, 100)
     self.exploit_slider.setValue(70)
-    self.exploit_slider.setToolTip("0 = pure exploration, 100 = pure exploitation")
-    next_layout.addWidget(self.exploit_slider, 1)
+    self.exploit_slider.setToolTip("0 = pure exploration (diverse experiments), 100 = pure exploitation (focus on best areas)")
+    self.exploit_slider.setMinimumHeight(30)  # Make the slider taller
+    self.exploit_slider.setStyleSheet("""
+        QSlider::groove:horizontal {
+            height: 10px;
+            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
+                                        stop:0 #5DADE2, stop:1 #27AE60);
+            margin: 0px;
+        }
+        QSlider::handle:horizontal {
+            background: #2C3E50;
+            border: 1px solid #1B2631;
+            width: 18px;
+            margin: -5px 0px;
+            border-radius: 9px;
+        }
+    """)
+    slider_layout.addWidget(self.exploit_slider)
     
+    # Add labels below the slider to explain the meaning
+    explanation_layout = QHBoxLayout()
+    exploration_label = QLabel("Search new areas")
+    exploration_label.setStyleSheet("color: #5DADE2;")
+    explanation_layout.addWidget(exploration_label)
+    explanation_layout.addStretch(1)
+    exploitation_label = QLabel("Refine best results")
+    exploitation_label.setStyleSheet("color: #27AE60;")
+    explanation_layout.addWidget(exploitation_label)
+    slider_layout.addLayout(explanation_layout)
+    
+    next_layout.addLayout(slider_layout)
+    
+    # Add the generate button
+    generate_layout = QHBoxLayout()
     generate_next_btn = QPushButton("Generate Next")
     generate_next_btn.clicked.connect(lambda: generate_next_experiments(self))
-    next_layout.addWidget(generate_next_btn)
+    generate_layout.addStretch(1)
+    generate_layout.addWidget(generate_next_btn)
+    next_layout.addLayout(generate_layout)
     
     control_panel.addWidget(next_group)
     
@@ -374,27 +700,6 @@ def setup_experiment_tab(self):
     control_panel.addWidget(round_group)
     
     layout.addLayout(control_panel)
-    
-    # Instructions for direct table editing
-    instructions_box = QGroupBox("Result Entry")
-    instructions_layout = QVBoxLayout(instructions_box)
-    
-    instructions_label = QLabel(
-        "<b>Two ways to enter results:</b><br>"
-        "1. <b>Direct editing:</b> Double-click on any result cell (columns with *) to enter values directly<br>"
-        "2. <b>Dialog:</b> Select an experiment row and click 'Add Result' for a detailed entry form"
-    )
-    instructions_label.setWordWrap(True)
-    instructions_layout.addWidget(instructions_label)
-    
-    # Quick tip
-    tip_label = QLabel(
-        "<i>Tip: You can enter values as 85.2 or 85.2% - both work!</i>"
-    )
-    tip_label.setStyleSheet("color: #0066cc;")
-    instructions_layout.addWidget(tip_label)
-    
-    layout.addWidget(instructions_box)
     
     # Experiment table
     experiment_group = QGroupBox("Planned Experiments")

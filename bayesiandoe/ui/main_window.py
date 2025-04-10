@@ -60,8 +60,17 @@ from .ui_utils import (
 from .ui_callbacks import (
     update_objectives, show_registry_item_tooltip, refresh_registry,
     on_prior_selected, update_best_results, show_result_details,
-    show_prior_help, on_param_button_clicked
+    show_prior_help, on_param_button_clicked, show_design_method_help
 )
+
+# Dictionary to store lazily loaded modules
+_lazy_modules = {}
+
+def lazy_import(module_name):
+    """Lazily import modules only when needed"""
+    if module_name not in _lazy_modules:
+        _lazy_modules[module_name] = __import__(module_name, fromlist=[''])
+    return _lazy_modules[module_name]
 
 class BayesianDOEApp(QMainWindow):
     def __init__(self):
@@ -80,13 +89,12 @@ class BayesianDOEApp(QMainWindow):
         self.experiment_spin.setMaximum(1000)
         self.experiment_spin.setValue(10)
         
-        self.init_ui()
+        # Initialize core components first
+        self.log_display = LogDisplay()
         
-    def init_ui(self):
+        # Create UI skeleton
         self.setWindowTitle("Bayesian DOE - Chemical Reaction Optimizer")
         self.setMinimumSize(1200, 800)
-        
-        self.log_display = LogDisplay()
         
         # Add the n_initial_spin and n_next_spin attributes
         self.n_initial_spin = None
@@ -99,37 +107,137 @@ class BayesianDOEApp(QMainWindow):
         if not hasattr(self.model, 'planned_experiments'):
             self.model.planned_experiments = []
         
+        # Create basic UI
         self.create_menu_bar()
         self.create_status_bar()
-        self.create_central_widget()
         
-        self.log(" Application started successfully")
+        # Initialize central widget but defer tab creation
+        central_widget = QWidget()
+        main_layout = QVBoxLayout(central_widget)
+        self.tab_widget = QTabWidget()
+        main_layout.addWidget(self.tab_widget)
+        self.setCentralWidget(central_widget)
+        
+        # Schedule detailed UI initialization for after showing the main window
+        QTimer.singleShot(100, self.delayed_init_ui)
+        
+        self.log(" Application initialized")
+    
+    def delayed_init_ui(self):
+        """Initialize UI components in a delayed manner"""
+        # Initialize first tab immediately (most important for user)
+        from .tab_setup import setup_setup_tab
+        setup_setup_tab(self)
+        
+        # Schedule remaining tabs with delays between them
+        QTimer.singleShot(200, lambda: self.init_tab_2())
+        QTimer.singleShot(300, lambda: self.init_tab_3())
+        QTimer.singleShot(400, lambda: self.init_tab_4())
+        QTimer.singleShot(500, lambda: self.init_tab_5())
+        
+        # Add tab change handler to update the UI when switching tabs
+        self.tab_widget.currentChanged.connect(self.on_tab_changed)
+        
+        # Add validation button
+        validate_button = QPushButton("Validate Setup & Continue ➔")
+        validate_button.setStyleSheet("""
+            QPushButton {
+                background-color: #e67e22;
+                color: white;
+                border-radius: 5px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #d35400;
+            }
+            QPushButton:disabled {
+                background-color: #bdc3c7;
+            }
+        """)
+        validate_button.clicked.connect(self.validate_setup)
+        self.tab_widget.setCornerWidget(validate_button, Qt.TopRightCorner)
+        self.validate_button = validate_button  # Store reference for later
+        
+        # Initialize setup validation state
+        self.setup_validated = False
+        self.disable_tabs()
+        
+        self.log(" Application interface ready")
+    
+    def init_tab_2(self):
+        """Initialize the second tab (Prior tab)"""
+        from .tab_setup import setup_prior_tab
+        setup_prior_tab(self)
+    
+    def init_tab_3(self):
+        """Initialize the third tab (Experiment tab)"""
+        from .tab_setup import setup_experiment_tab
+        setup_experiment_tab(self)
+    
+    def init_tab_4(self):
+        """Initialize the fourth tab (Results tab)"""
+        from .tab_setup import setup_results_tab
+        setup_results_tab(self)
+    
+    def init_tab_5(self):
+        """Initialize the fifth tab (Analysis tab)"""
+        from .tab_setup import setup_analysis_tab
+        setup_analysis_tab(self)
         
     def create_menu_bar(self):
         menu_bar = self.menuBar()
         
         file_menu = menu_bar.addMenu("File")
-        file_menu.addAction(QAction("New Project", self, triggered=lambda: new_project(self)))
-        file_menu.addAction(QAction("Open Project", self, triggered=lambda: open_project(self)))
-        file_menu.addAction(QAction("Save Project", self, triggered=lambda: save_project(self)))
+        file_menu.addAction(QAction("New Project", self, triggered=lambda: self.on_menu_action("new_project")))
+        file_menu.addAction(QAction("Open Project", self, triggered=lambda: self.on_menu_action("open_project")))
+        file_menu.addAction(QAction("Save Project", self, triggered=lambda: self.on_menu_action("save_project")))
         file_menu.addSeparator()
-        file_menu.addAction(QAction("Import Data", self, triggered=lambda: import_data(self)))
-        file_menu.addAction(QAction("Export Results", self, triggered=lambda: export_results(self)))
+        file_menu.addAction(QAction("Import Data", self, triggered=lambda: self.on_menu_action("import_data")))
+        file_menu.addAction(QAction("Export Results", self, triggered=lambda: self.on_menu_action("export_results")))
         file_menu.addSeparator()
         file_menu.addAction(QAction("Exit", self, triggered=self.close))
         
         edit_menu = menu_bar.addMenu("Edit")
-        edit_menu.addAction(QAction("Optimization Settings", self, triggered=lambda: show_optimization_settings(self)))
-        edit_menu.addAction(QAction("Preferences", self, triggered=lambda: show_preferences(self)))
+        edit_menu.addAction(QAction("Optimization Settings", self, triggered=lambda: self.on_menu_action("optimization_settings")))
+        edit_menu.addAction(QAction("Preferences", self, triggered=lambda: self.on_menu_action("preferences")))
         
         tools_menu = menu_bar.addMenu("Tools")
-        tools_menu.addAction(QAction("Structure Editor", self, triggered=lambda: open_structure_editor(self)))
-        tools_menu.addAction(QAction("Parallel Experiments", self, triggered=lambda: plan_parallel_experiments(self)))
-        tools_menu.addAction(QAction("Statistical Analysis", self, triggered=lambda: statistical_analysis(self)))
+        tools_menu.addAction(QAction("Structure Editor", self, triggered=lambda: self.on_menu_action("structure_editor")))
+        tools_menu.addAction(QAction("Parallel Experiments", self, triggered=lambda: self.on_menu_action("parallel_experiments")))
+        tools_menu.addAction(QAction("Statistical Analysis", self, triggered=lambda: self.on_menu_action("statistical_analysis")))
         
         help_menu = menu_bar.addMenu("Help")
-        help_menu.addAction(QAction("Documentation", self, triggered=lambda: show_documentation(self)))
-        help_menu.addAction(QAction("About", self, triggered=lambda: show_about(self)))
+        help_menu.addAction(QAction("Documentation", self, triggered=lambda: self.on_menu_action("documentation")))
+        help_menu.addAction(QAction("About", self, triggered=lambda: self.on_menu_action("about")))
+    
+    def on_menu_action(self, action):
+        """Handle menu actions with lazy loading of required modules"""
+        from .ui_actions import (
+            new_project, open_project, save_project, import_data, export_results,
+            statistical_analysis, plan_parallel_experiments, open_structure_editor,
+            show_optimization_settings, show_preferences, show_documentation, show_about
+        )
+        from .ui_callbacks import show_design_method_help
+        
+        action_map = {
+            "new_project": lambda: new_project(self),
+            "open_project": lambda: open_project(self),
+            "save_project": lambda: save_project(self),
+            "import_data": lambda: import_data(self),
+            "export_results": lambda: export_results(self),
+            "optimization_settings": lambda: show_optimization_settings(self),
+            "preferences": lambda: show_preferences(self),
+            "structure_editor": lambda: open_structure_editor(self),
+            "parallel_experiments": lambda: plan_parallel_experiments(self),
+            "statistical_analysis": lambda: statistical_analysis(self),
+            "documentation": lambda: show_documentation(self),
+            "about": lambda: show_about(self),
+            "algorithm_help": lambda: show_design_method_help(self)
+        }
+        
+        if action in action_map:
+            action_map[action]()
         
     def create_status_bar(self):
         from ..core import settings
@@ -147,7 +255,7 @@ class BayesianDOEApp(QMainWindow):
         self.auto_round_check = QCheckBox("Auto Round")
         self.auto_round_check.setChecked(settings.auto_round)
         self.auto_round_check.setToolTip("Automatically round numerical values")
-        self.auto_round_check.stateChanged.connect(lambda: update_rounding_settings(self))
+        self.auto_round_check.stateChanged.connect(lambda: self.update_rounding_settings())
         rounding_layout.addWidget(self.auto_round_check)
         
         rounding_layout.addWidget(QLabel("Precision:"))
@@ -155,13 +263,13 @@ class BayesianDOEApp(QMainWindow):
         self.precision_spin.setRange(0, 8)
         self.precision_spin.setValue(settings.rounding_precision)
         self.precision_spin.setToolTip("Number of decimal places for rounding")
-        self.precision_spin.valueChanged.connect(lambda: update_rounding_settings(self))
+        self.precision_spin.valueChanged.connect(lambda: self.update_rounding_settings())
         rounding_layout.addWidget(self.precision_spin)
         
         self.smart_round_check = QCheckBox("Smart")
         self.smart_round_check.setChecked(settings.smart_rounding)
         self.smart_round_check.setToolTip("Use smart rounding based on value magnitude")
-        self.smart_round_check.stateChanged.connect(lambda: update_rounding_settings(self))
+        self.smart_round_check.stateChanged.connect(lambda: self.update_rounding_settings())
         rounding_layout.addWidget(self.smart_round_check)
         
         self.status_bar.addPermanentWidget(rounding_section)
@@ -171,46 +279,127 @@ class BayesianDOEApp(QMainWindow):
         self.progress_bar.setValue(0)
         self.status_bar.addPermanentWidget(self.progress_bar)
         
-    def create_central_widget(self):
-        central_widget = QWidget()
-        main_layout = QVBoxLayout(central_widget)
-        
-        self.tab_widget = QTabWidget()
-        setup_setup_tab(self)
-        setup_prior_tab(self)
-        setup_experiment_tab(self)
-        setup_results_tab(self)
-        setup_analysis_tab(self)
-        
-        # Add a tab change handler to update the UI when switching tabs
-        self.tab_widget.currentChanged.connect(self.on_tab_changed)
-        
-        main_layout.addWidget(self.tab_widget)
-        
-        self.setCentralWidget(central_widget)
+    def update_rounding_settings(self):
+        """Update rounding settings with lazy import"""
+        from .ui_utils import update_rounding_settings
+        update_rounding_settings(self)
         
     def log(self, message):
-        log(self, message)
+        """Log a message to the application log"""
+        if hasattr(self, 'log_display'):
+            self.log_display.log(message)
+        print(message)
 
-    # Add this new method to handle tab changes
+    def disable_tabs(self):
+        """Disable tabs that require validated setup"""
+        # Only enable setup tab
+        for i in range(1, self.tab_widget.count()):
+            self.tab_widget.setTabEnabled(i, False)
+
+    def validate_setup(self):
+        """Validate that experiment setup is complete before allowing access to other tabs"""
+        # Check if parameters are defined
+        if not self.model.parameters:
+            QMessageBox.warning(self, "Validation Failed", 
+                              "Please define at least one parameter before continuing.")
+            return False
+        
+        # Check if objectives are defined
+        if not self.model.objectives:
+            QMessageBox.warning(self, "Validation Failed", 
+                              "Please define at least one objective before continuing.")
+            return False
+        
+        # All validation passed
+        self.setup_validated = True
+        
+        # Enable all tabs
+        for i in range(self.tab_widget.count()):
+            self.tab_widget.setTabEnabled(i, True)
+        
+        # Update button to show validated status
+        self.validate_button.setText("✓ Setup Validated")
+        self.validate_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2ecc71;
+                color: white;
+                border-radius: 5px;
+                padding: 8px 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #27ae60;
+            }
+        """)
+        self.validate_button.setEnabled(False)
+        
+        # Show success message
+        self.log(" Experiment setup validated - Success")
+        
+        # Navigate to Prior Knowledge tab
+        self.tab_widget.setCurrentIndex(1)
+        
+        return True
+
     def on_tab_changed(self, index):
+        """Load tab contents when user switches to that tab, with auto-refresh"""
         # Prior Knowledge tab is typically index 1
         if index == 1:  # Prior Knowledge tab
-            update_prior_param_buttons(self)
-            update_prior_table(self)
-            update_parameter_combos(self)
-            if hasattr(self, 'viz_param_combo') and self.viz_param_combo.count() > 0:
-                update_prior_plot(self)
+            self.update_prior_tab()
         # Results tab is typically index 3    
         elif index == 3:  # Results tab
-            if self.model.experiments:
-                update_results_plot(self)
-                update_best_results(self)
+            self.update_results_tab(force_refresh=True)
         # Analysis tab is typically index 4
         elif index == 4:  # Analysis tab
-            if self.model.experiments:
+            self.update_analysis_tab(force_refresh=True)
+            
+    def update_prior_tab(self):
+        """Update prior tab contents with lazy imports"""
+        # Import only when needed
+        from .ui_utils import update_prior_param_buttons, update_prior_table, update_parameter_combos
+        from .ui_visualization import update_prior_plot
+        
+        update_prior_param_buttons(self)
+        update_prior_table(self)
+        update_parameter_combos(self)
+        if hasattr(self, 'viz_param_combo') and self.viz_param_combo.count() > 0:
+            update_prior_plot(self)
+    
+    def update_results_tab(self, force_refresh=False):
+        """Update results tab contents with lazy imports and auto-refresh on tab click"""
+        # Import only when needed
+        from .ui_visualization import update_results_plot
+        from .ui_callbacks import update_best_results
+        
+        if self.model.experiments:
+            # Always update tables
+            if hasattr(self, 'best_table'):
+                self.best_table.update_from_model(self.model, self.n_best_spin.value() if hasattr(self, 'n_best_spin') else 5)
+                
+            if hasattr(self, 'all_results_table'):
+                self.all_results_table.update_from_model(self.model)
+                
+            # Force refresh plots when tab is clicked
+            if force_refresh:
+                update_results_plot(self)
+                update_best_results(self)
+                self.log(" Results visualizations refreshed - Success")
+    
+    def update_analysis_tab(self, force_refresh=False):
+        """Update analysis tab contents with lazy imports and auto-refresh on tab click"""
+        # Import only when needed
+        from .ui_visualization import update_convergence_plot, update_model_plot, update_surface_plot
+        
+        if self.model.experiments:
+            if force_refresh:
                 if hasattr(self, 'convergence_canvas'):
                     update_convergence_plot(self)
+                    
+                if hasattr(self, 'model_canvas'):
+                    update_model_plot(self)
+                    
+                # Skip surface plot automatic update as it's computationally expensive
+                self.log(" Analysis visualizations refreshed - Success")
 
     def handle_critical_error(self, error_msg, details=None):
         """Handle critical errors with proper user feedback."""
@@ -256,7 +445,8 @@ class BayesianDOEApp(QMainWindow):
             if hasattr(self, 'all_results_table'):
                 self.all_results_table.update_from_model(self.model)
                 
-            # Update the best result label - make sure it has conditional checks inside
+            # Lazy import for updating best result label
+            from .ui_utils import update_best_result_label
             update_best_result_label(self)
                 
             # Update counts
@@ -269,11 +459,14 @@ class BayesianDOEApp(QMainWindow):
             if hasattr(self, 'tab_widget'):
                 current_tab = self.tab_widget.currentIndex()
                 if current_tab == 3:  # Results tab
+                    from .ui_visualization import update_results_plot
                     update_results_plot(self)
                 elif current_tab == 4:  # Analysis tab
                     if hasattr(self, 'convergence_canvas'):
+                        from .ui_visualization import update_convergence_plot
                         update_convergence_plot(self)
                     if hasattr(self, 'correlation_canvas'):
+                        from .ui_visualization import update_correlation_plot
                         update_correlation_plot(self)
                     
             # Log success message (only if not already logged from the source)

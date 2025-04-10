@@ -11,18 +11,23 @@ from .dialogs import PriorDialog, ParameterLinkDialog
 def update_objectives(self):
     """Update the objectives and weights from the UI controls"""
     try:
-        objectives = {}
-        for row in range(self.objectives_table.rowCount()):
-            obj_item = self.objectives_table.item(row, 0)
-            weight_item = self.objectives_table.item(row, 1)
-            
-            if obj_item and obj_item.text().strip() and weight_item and weight_item.text().strip():
-                obj_name = obj_item.text().strip().lower()
-                try:
-                    weight = float(weight_item.text().strip())
-                    objectives[obj_name] = weight
-                except ValueError:
-                    pass
+        # Use the new get_objectives_from_list method if available
+        if hasattr(self, 'get_objectives_from_list'):
+            objectives = self.get_objectives_from_list()
+        else:
+            # Fallback to old method for backward compatibility
+            objectives = {}
+            for row in range(self.objectives_table.rowCount()):
+                obj_item = self.objectives_table.item(row, 0)
+                weight_item = self.objectives_table.item(row, 1)
+                
+                if obj_item and obj_item.text().strip() and weight_item and weight_item.text().strip():
+                    obj_name = obj_item.text().strip().lower()
+                    try:
+                        weight = float(weight_item.text().strip())
+                        objectives[obj_name] = weight
+                    except ValueError:
+                        pass
         
         if objectives:
             # Ensure model has the method
