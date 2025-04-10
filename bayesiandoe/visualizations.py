@@ -18,7 +18,19 @@ def plot_optimization_history(model, ax=None):
     labels = []
     
     for obj in model.objectives:
-        values = [exp.get(obj, 0.0) * 100.0 for exp in model.experiments]
+        values = []
+        for exp in model.experiments:
+            obj_value = None
+            # Try to get value from results dict first (new format)
+            if 'results' in exp and obj in exp['results']:
+                obj_value = exp['results'][obj]
+            # Fall back to legacy format
+            elif obj in exp:
+                obj_value = exp[obj]
+            
+            # Use 0.0 as fallback if value not found
+            values.append((obj_value or 0.0) * 100.0)
+            
         if values:
             data.append(values)
             labels.append(obj.capitalize())
@@ -100,10 +112,33 @@ def plot_parameter_contour(model, x_param, y_param, ax=None):
     z_data = []
     
     for exp in model.experiments:
-        if x_param in exp and y_param in exp and obj in exp:
-            x_val = exp[x_param]
-            y_val = exp[y_param]
-            
+        # Check for both legacy and new format
+        x_val = None
+        y_val = None
+        z_val = None
+        
+        # Access parameters from params dict if available, otherwise direct access
+        if 'params' in exp:
+            if x_param in exp['params'] and y_param in exp['params']:
+                x_val = exp['params'][x_param]
+                y_val = exp['params'][y_param]
+        else:
+            # Legacy format
+            if x_param in exp and y_param in exp:
+                x_val = exp[x_param]
+                y_val = exp[y_param]
+        
+        # Access results from results dict if available, otherwise direct access
+        if 'results' in exp:
+            if obj in exp['results']:
+                z_val = exp['results'][obj]
+        else:
+            # Legacy format
+            if obj in exp:
+                z_val = exp[obj]
+        
+        # Only proceed if we have all required values
+        if x_val is not None and y_val is not None and z_val is not None:
             if model.parameters[x_param].param_type == "categorical":
                 choices = model.parameters[x_param].choices
                 x_val = choices.index(x_val) if x_val in choices else 0
@@ -114,7 +149,7 @@ def plot_parameter_contour(model, x_param, y_param, ax=None):
                 
             x_data.append(float(x_val))
             y_data.append(float(y_val))
-            z_data.append(float(exp[obj]) * 100.0)
+            z_data.append(float(z_val) * 100.0)
             
     if len(x_data) < 3:
         ax.text(0.5, 0.5, "Need at least 3 data points for contour plot", 
@@ -407,20 +442,8 @@ def plot_response_surface(model, x_param, y_param, obj, gp_model=None, ax=None):
     return ax
 
 def plot_convergence(model, ax=None):
-    """Plot the convergence of optimization over experiments with improved analysis.
-    
-    Shows:
-    - Individual experiment scores
-    - Best score so far
-    - Projected convergence curve
-    - Estimated asymptotic performance
-    - Confidence regions for predictions
-    - Parameter importance inset
-    """
     if ax is None:
         fig, ax = plt.subplots(figsize=(10, 7))
-    else:
-        fig = ax.figure
     
     if not model.experiments:
         ax.text(0.5, 0.5, "No experiment results yet", 
@@ -487,47 +510,6 @@ def plot_convergence(model, ax=None):
     ax.plot(x, best_scores, '-', linewidth=2.5, color='#ea4335', 
            label='Best Score So Far')
     
-    # Add parameter importance analysis as inset
-    try:
-        param_importance = model.analyze_parameter_importance()
-        
-        if param_importance:
-            # Create inset axes for parameter importance
-            ax_inset = inset_axes(ax, width="30%", height="25%", loc='lower right',
-                                 bbox_to_anchor=(0.98, 0.02, 1, 1),
-                                 bbox_transform=ax.transAxes,
-                                 borderpad=0)
-            
-            # Sort parameters by importance
-            sorted_params = sorted(param_importance.items(), key=lambda x: x[1], reverse=True)
-            
-            # Take top 5 parameters only
-            if len(sorted_params) > 5:
-                sorted_params = sorted_params[:5]
-                
-            params = [p[0] for p in sorted_params]
-            importance = [p[1] for p in sorted_params]
-            
-            # Plot horizontal bar chart
-            y_pos = range(len(params))
-            ax_inset.barh(y_pos, importance, color='#4285f4', alpha=0.7)
-            ax_inset.set_yticks(y_pos)
-            ax_inset.set_yticklabels(params, fontsize=8)
-            ax_inset.set_xlabel('Importance', fontsize=8)
-            ax_inset.set_title('Parameter Importance', fontsize=9)
-            ax_inset.set_xlim(0, 1.0)
-            
-            # Remove spines
-            for spine in ax_inset.spines.values():
-                spine.set_visible(False)
-                
-            # Add light gray background
-            ax_inset.set_facecolor('#f0f0f0')
-            ax_inset.set_axisbelow(True)
-            ax_inset.grid(axis='x', alpha=0.3)
-    except Exception as e:
-        print(f"Error plotting parameter importance: {e}")
-    
     # Fit convergence model and project future performance
     try:
         from scipy.optimize import curve_fit
@@ -553,11 +535,34 @@ def plot_convergence(model, ax=None):
             max(lower_bound[2], min(upper_bound[2], init_value))
         ]
         
-        # Fit the convergence model to the data
-        try:
-            popt, pcov = curve_fit(convergence_model, x, best_scores, p0=p0, 
-                                   bounds=(lower_bound, upper_bound), maxfev=10000)
+        # Add cross-validation to check goodness of fit
+        if len(best_scores) >= 5:  # Need enough data for cross-validation
+            # Split data for cross-validation
+            train_size = max(3, int(len(best_scores) * 0.7))
+            train_x, train_y = x[:train_size], best_scores[:train_size]
+            test_x, test_y = x[train_size:], best_scores[train_size:]
+            
+            # Fit on training data
+            popt, pcov = curve_fit(convergence_model, train_x, train_y, 
+                                  p0=p0, bounds=(lower_bound, upper_bound), maxfev=10000)
+            
+            # Extract parameters
             a, b, c = popt
+            
+            # Evaluate on test data
+            y_pred = convergence_model(test_x, *popt)
+            
+            # Calculate R^2 on test data
+            if len(test_y) > 0:
+                ss_tot = np.sum((test_y - np.mean(test_y))**2)
+                ss_res = np.sum((test_y - y_pred)**2)
+                r2 = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
+                
+                # If R^2 is suspiciously high with few data points, show warning
+                if r2 > 0.95 and len(best_scores) < 10:
+                    ax.text(0.05, 0.05, 
+                           "⚠️ Limited data: projection may be overconfident",
+                           transform=ax.transAxes, color='red', fontsize=9)
             
             # Compute projected future values
             future_rounds = max(20, len(scores) * 2)
@@ -625,13 +630,10 @@ def plot_convergence(model, ax=None):
             except:
                 pass  # Skip confidence interval if it fails
                 
-        except Exception as e:
-            import traceback
-            print(f"Warning: Failed to fit convergence model: {e}")
-            print(traceback.format_exc())
-            
-    except ImportError:
-        print("Warning: scipy.optimize not available, skipping convergence prediction")
+    except Exception as e:
+        import traceback
+        print(f"Warning: Failed to fit convergence model: {e}")
+        print(traceback.format_exc())
         
     ax.set_xlabel('Experiment Number', fontsize=12)
     ax.set_ylabel('Composite Score (%)', fontsize=12)

@@ -1,16 +1,18 @@
+import sys
+import os
 import time
 import random
 import logging
 import numpy as np
 import concurrent.futures
-from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QRect
+from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, QEasingCurve, QRect, Signal, QMetaObject
 from PySide6.QtGui import QPixmap, QFont, QIcon, QColor, QPainter, QBrush, QPen, QLinearGradient, QImage
 from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QSplashScreen, QFrame, QHeaderView,
-    QLabel, QMessageBox
+    QLabel, QMessageBox, QComboBox, QHBoxLayout, QWidget, QLayout, QVBoxLayout, QPushButton
 )
 from ..core import _calculate_parameter_distance, settings
-from concurrent.futures import ThreadPoolExecutor
+import matplotlib.pyplot as plt
 
 class LogDisplay:
     def __init__(self):
@@ -35,7 +37,7 @@ class SplashScreen(QSplashScreen):
         self.start_time = time.time()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
-        self.timer.start(30)
+        self.timer.start(20)  # More frequent updates for smoother animation
         
         # Initialize system details
         self.system_details = "Detecting system..."
@@ -61,8 +63,12 @@ class SplashScreen(QSplashScreen):
         self.loaded_packages = 0
         self.missing_packages = []
         
-        # Start package loading threads
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+        # Pre-render background to improve performance
+        self.cached_background = None
+        self.cached_molecular = None
+        
+        # Start package loading threads with larger thread pool
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
         self.load_essential_future = self.executor.submit(self.load_essential_packages)
         
         # Draw initial splash screen immediately
@@ -87,14 +93,7 @@ class SplashScreen(QSplashScreen):
                 self.current_package_index = i
                 
                 # Import the package
-                module = __import__(package)
-                
-                # Get version if available
-                try:
-                    version = getattr(module, '__version__', 'unknown')
-                    self.essential_packages[i] = (package, f"{message} ({version})")
-                except:
-                    pass
+                __import__(package)
                 
                 loaded_count += 1
             except ImportError:
@@ -122,14 +121,7 @@ class SplashScreen(QSplashScreen):
                 self.current_package_index = offset + i
                 
                 # Import the package
-                module = __import__(package)
-                
-                # Get version if available
-                try:
-                    version = getattr(module, '__version__', 'unknown')
-                    self.nonessential_packages[i] = (package, f"{message} ({version})")
-                except:
-                    pass
+                __import__(package)
                 
                 loaded_count += 1
             except ImportError:
@@ -153,7 +145,7 @@ class SplashScreen(QSplashScreen):
         if self.package_loading_complete:
             # If all packages are loaded, complete the progress
             time_progress = min(int(elapsed_time / self.duration_ms * 100), 100)
-            self.progress = time_progress
+            self.progress = max(self.progress, time_progress)  # Only increase, never decrease
         elif self.essential_loading_complete:
             # If essential packages loaded but non-essential still loading
             essential_weight = 0.6  # Essential packages are 60% of progress
@@ -170,7 +162,7 @@ class SplashScreen(QSplashScreen):
         # Determine if we should continue showing the splash screen
         should_continue = ((elapsed_time < self.duration_ms) or 
                           not self.essential_loading_complete or
-                          (not self.package_loading_complete and elapsed_time < 5000))  # 5s max wait time
+                          (not self.package_loading_complete and elapsed_time < 4000))  # 4s max wait time
         
         if should_continue:
             self.draw_splash()
@@ -192,10 +184,13 @@ class SplashScreen(QSplashScreen):
         
         rect = self.splash_pix.rect()
         
+        # Fill background
         painter.fillRect(rect, QColor(15, 20, 25))
         
+        # Draw molecular background (with caching for performance)
         self.draw_molecular_background(painter, rect)
      
+        # Draw main title
         font = QFont("Helvetica", 48, QFont.Bold)
         font.setLetterSpacing(QFont.AbsoluteSpacing, 1.5)
         font.setStyleStrategy(QFont.PreferAntialias)
@@ -204,6 +199,7 @@ class SplashScreen(QSplashScreen):
         painter.setPen(QColor(240, 250, 250))
         painter.drawText(rect.adjusted(0, 0, 0, -rect.height()/3), Qt.AlignHCenter | Qt.AlignBottom, "BAYESIAN DOE")
         
+        # Draw progress bar
         self.draw_cyber_progress(painter, rect)
         
         # Draw current loading message
@@ -219,6 +215,7 @@ class SplashScreen(QSplashScreen):
         painter.setPen(QColor(0, 220, 200))
         painter.drawText(rect.adjusted(0, rect.height()*0.78 + 30, 0, 0), Qt.AlignHCenter | Qt.AlignTop, message)
         
+        # Draw version and copyright
         font = QFont("Helvetica", 16)
         font.setStyleStrategy(QFont.PreferAntialias)
         painter.setFont(font)
@@ -234,7 +231,7 @@ class SplashScreen(QSplashScreen):
         painter.setPen(QColor(120, 140, 140))
         painter.drawText(rect.adjusted(0, 0, 0, -40), Qt.AlignHCenter | Qt.AlignBottom, self.system_details)
         
-        # Show loading stats in final phase
+        # Only show extra stats when complete (reduces drawing operations)
         if self.package_loading_complete:
             stats_text = f"Loaded {self.loaded_packages}/{len(self.essential_packages) + len(self.nonessential_packages)} packages"
             painter.drawText(rect.adjusted(0, 0, 0, -60), Qt.AlignHCenter | Qt.AlignBottom, stats_text)
@@ -243,39 +240,91 @@ class SplashScreen(QSplashScreen):
         self.setPixmap(self.splash_pix)
         
     def draw_molecular_background(self, painter, rect):
-        # Use deterministic randomness for structure but make animation based on counter
-        # This creates a pulsing/animated effect while keeping structure consistent
-        random.seed(42)
+        # Use static seed for consistent appearance
+        np.random.seed(42)
         
-        # Generate nodes (atoms)
-        nodes = []
-        for i in range(15):
-            x = random.randint(50, rect.width() - 50)
-            y = random.randint(50, rect.height() - 50)
-            r = random.randint(5, 12)
+        # Only redraw full molecular background every few frames
+        if self.cached_molecular is None or self.counter % 5 == 0:
+            # Create a new pixmap for molecular background
+            if self.cached_molecular is None:
+                self.cached_molecular = QPixmap(rect.width(), rect.height())
+                self.cached_molecular.fill(Qt.transparent)
             
+            mol_painter = QPainter(self.cached_molecular)
+            mol_painter.setRenderHint(QPainter.Antialiasing, True)
+            
+            # Clear background
+            mol_painter.fillRect(rect, Qt.transparent)
+            
+            # Draw background grid (static)
+            grid_color = QColor(40, 60, 80, 40) if not self.package_loading_complete else QColor(40, 70, 60, 40)
+            mol_painter.setPen(QPen(grid_color, 0.8))
+            step = 30
+            for x in range(0, rect.width(), step):
+                mol_painter.drawLine(x, 0, x, rect.height())
+            for y in range(0, rect.height(), step):
+                mol_painter.drawLine(0, y, rect.width(), y)
+            
+            # Generate nodes (atoms) positions once and reuse
+            if not hasattr(self, 'nodes_positions'):
+                self.nodes_positions = []
+                for i in range(15):
+                    x = np.random.randint(50, rect.width() - 50)
+                    y = np.random.randint(50, rect.height() - 50)
+                    r = np.random.randint(5, 12)
+                    self.nodes_positions.append((x, y, r))
+            
+            # Generate bonds once
+            if not hasattr(self, 'bonds'):
+                self.bonds = []
+                for i in range(len(self.nodes_positions)):
+                    for j in range(i+1, len(self.nodes_positions)):
+                        bond_seed = i * 1000 + j
+                        np.random.seed(bond_seed)
+                        if np.random.random() < 0.4:
+                            self.bonds.append((i, j, bond_seed))
+            
+            # Draw bonds between atoms (semitransparent)
+            edge_color = QColor(70, 100, 180, 70) if not self.package_loading_complete else QColor(70, 180, 160, 70)
+            
+            for i, j, bond_seed in self.bonds:
+                x1, y1, _ = self.nodes_positions[i]
+                x2, y2, _ = self.nodes_positions[j]
+                
+                # Add a subtle pulse effect to bonds
+                phase = (self.counter * 2 + bond_seed) % 360
+                pulse_alpha = int(40 + 30 * np.sin(np.radians(phase)))
+                edge_color.setAlpha(pulse_alpha)
+                mol_painter.setPen(QPen(edge_color, 1.2))
+                mol_painter.drawLine(x1, y1, x2, y2)
+                
+            mol_painter.end()
+        
+        # Draw the cached molecular background
+        painter.drawPixmap(0, 0, self.cached_molecular)
+        
+        # Draw animated elements on top (nodes with pulsing effect)
+        for i, (x, y, r) in enumerate(self.nodes_positions):
             # Add a subtle oscillation effect
             phase = (self.counter + i * 15) % 360
             pulse = 0.2 * np.sin(np.radians(phase))
             r_animated = r * (1.0 + pulse)
             
-            nodes.append((x, y, r_animated))
-            
             # Use different colors based on package loading progress
             if not self.package_loading_complete:
                 # Blue-cyan scheme during loading
                 color = QColor(
-                    random.randint(30, 60),
-                    random.randint(100, 180),
-                    random.randint(180, 220),
+                    np.random.randint(30, 60),
+                    np.random.randint(100, 180),
+                    np.random.randint(180, 220),
                     100 + int(20 * pulse)  # Make opacity pulse too
                 )
             else:
                 # Green-cyan scheme when complete
                 color = QColor(
-                    random.randint(30, 70),
-                    random.randint(160, 220),
-                    random.randint(180, 210),
+                    np.random.randint(30, 70),
+                    np.random.randint(160, 220),
+                    np.random.randint(180, 210),
                     100 + int(20 * pulse)
                 )
                 
@@ -283,36 +332,6 @@ class SplashScreen(QSplashScreen):
             painter.setBrush(color)
             painter.drawEllipse(x - r_animated, y - r_animated, r_animated*2, r_animated*2)
             
-        # Draw bonds between atoms
-        edge_color = QColor(70, 100, 180, 70) if not self.package_loading_complete else QColor(70, 180, 160, 70)
-        painter.setPen(QPen(edge_color, 1.2))
-        
-        for i in range(len(nodes)):
-            for j in range(i+1, len(nodes)):
-                # Use deterministic random for stable structure
-                bond_seed = i * 1000 + j
-                random.seed(bond_seed)
-                if random.random() < 0.4:
-                    x1, y1, _ = nodes[i]
-                    x2, y2, _ = nodes[j]
-                    
-                    # Add a subtle pulse effect to bonds
-                    phase = (self.counter * 2 + bond_seed) % 360
-                    pulse_alpha = int(40 + 30 * np.sin(np.radians(phase)))
-                    edge_color.setAlpha(pulse_alpha)
-                    painter.setPen(QPen(edge_color, 1.2))
-                    
-                    painter.drawLine(x1, y1, x2, y2)
-        
-        # Draw background grid
-        grid_color = QColor(40, 60, 80, 40) if not self.package_loading_complete else QColor(40, 70, 60, 40)
-        painter.setPen(QPen(grid_color, 0.8))
-        step = 30
-        for x in range(0, rect.width(), step):
-            painter.drawLine(x, 0, x, rect.height())
-        for y in range(0, rect.height(), step):
-            painter.drawLine(0, y, rect.width(), y)
-        
     def draw_cyber_progress(self, painter, rect):
         bar_width = rect.width() * 0.6
         bar_height = 14
@@ -363,12 +382,13 @@ class SplashScreen(QSplashScreen):
         
         # Shadow for text
         painter.setPen(QColor(0, 0, 0, 100))
-        painter.drawText(QRect(x + 2, y - 30 + 2, bar_width, 25), Qt.AlignCenter, f"INITIALIZING SYSTEM {self.progress}%")
+        progress_text = f"INITIALIZING SYSTEM {self.progress}%"
+        painter.drawText(QRect(x + 2, y - 30 + 2, bar_width, 25), Qt.AlignCenter, progress_text)
         
         # Main text
         text_color = QColor(0, 220, 200) if self.package_loading_complete else QColor(0, 180, 255)
         painter.setPen(text_color)
-        painter.drawText(QRect(x, y - 30, bar_width, 25), Qt.AlignCenter, f"INITIALIZING SYSTEM {self.progress}%")
+        painter.drawText(QRect(x, y - 30, bar_width, 25), Qt.AlignCenter, progress_text)
 
 class ParameterTable(QTableWidget):
     def __init__(self, parent=None):
@@ -398,23 +418,48 @@ class ParameterTable(QTableWidget):
             self.setItem(row, 3, QTableWidgetItem(param.units or ""))
 
 class ExperimentTable(QTableWidget):
+    # Define the missing signal
+    clear_table_signal = Signal()
+    
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setSortingEnabled(True)
+        self.setColumnCount(7)
+        self.setHorizontalHeaderLabels(["Round", "ID", "Status", "Parameters", "Results", "Score", "Notes"])
+        self.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.horizontalHeader().setStretchLastSection(True)
+        self.verticalHeader().setVisible(False)
         self.setSelectionBehavior(QTableWidget.SelectRows)
-        self.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed)
+        self.cellChanged.connect(self.handle_cell_change)
+        
+        # Connect the signal to clear method
+        self.clear_table_signal.connect(self.clearContents)
+        
+        # Store main window reference for later use
+        self.main_window = self.get_main_window()
+        
+        # Initialize round selector
+        self.round_selector = None
+        self.round_select_widget = None
         
         # Add a direct reference to store the model
         self.model = None
         
         # Initialize thread pool
-        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._prediction_start_time = 0
         self._prediction_future = None
         
-        # Connect to cell change events
-        self.cellChanged.connect(self.handle_cell_change)
+    def get_main_window(self):
+        """Find the main window instance by traversing up the widget tree"""
+        from ..ui.main_window import BayesianDOEApp
+        parent = self.parent()
         
+        # Traverse up the parent hierarchy until we find the main window
+        while parent and not isinstance(parent, BayesianDOEApp):
+            parent = parent.parent()
+        
+        return parent
+    
     def update_columns(self, model):
         # Store reference to the model
         self.model = model
@@ -473,6 +518,17 @@ class ExperimentTable(QTableWidget):
             # Only handle changes in objective columns
             if column < self.objective_columns_start or column > self.objective_columns_end:
                 return
+            
+            # Check if this is a previous round (read-only)
+            main_window = self.get_main_window()
+            if main_window and hasattr(main_window, 'view_round') and hasattr(main_window, 'current_round'):
+                if main_window.view_round < main_window.current_round:
+                    # Don't allow edits to previous rounds
+                    QMessageBox.warning(self, "Read-Only", 
+                                     "Previous rounds are read-only. Please go to the current round to add new results.")
+                    # Restore the table (discard changes)
+                    self.update_from_planned(self.model, getattr(main_window, 'round_start_indices', []))
+                    return
                 
             # Identify which experiment this is
             id_item = self.item(row, 1)
@@ -494,12 +550,28 @@ class ExperimentTable(QTableWidget):
                 
             # Parse the value (handle percentage signs)
             try:
+                has_percent = '%' in result_text
                 result_value = float(result_text.replace('%', '').strip())
-                # If value is > 1 and not a percentage sign, assume it's a percentage
-                if result_value > 1.0 and not '%' in result_text:
+                
+                # Convert to 0-1 scale if needed
+                if has_percent:
+                    # Value is explicitly marked as percentage (e.g., "78.5%"), convert to 0-1
                     result_value = result_value / 100.0
-                else:
-                    result_value = result_value / 100.0  # Always convert to 0-1 scale
+                elif result_value > 1.0:
+                    # Value > 1 without % sign, assume it's still a percentage (e.g., "78.5")
+                    result_value = result_value / 100.0
+                # else: value is already in 0-1 scale, keep as is
+                
+                # Validate the final value is in 0-1 range
+                if result_value < 0.0 or result_value > 1.0:
+                    QMessageBox.warning(self, "Invalid Value", 
+                                     "Please enter a value between 0-100% or 0-1")
+                    if result_item:
+                        self.blockSignals(True)
+                        result_item.setText("")
+                        self.blockSignals(False)
+                    return
+                    
             except ValueError:
                 # Restore previous value or clear cell
                 QMessageBox.warning(self, "Invalid Value", 
@@ -619,243 +691,313 @@ class ExperimentTable(QTableWidget):
             print(error_details)
     
     def update_from_planned(self, model, round_start_indices):
-        """Update experiment table from planned experiments with debug info."""
+        """Update experiment table with planned experiments, filtered by round"""
         try:
-            # Block signals during bulk update
-            self.blockSignals(True)
-            
-            if not hasattr(model, 'planned_experiments'):
-                model.planned_experiments = []
-                print("Initialized empty planned_experiments list")
-                
-            if not model.planned_experiments:
-                print("No planned experiments found")
-                self.blockSignals(False)
-                return
-            
-            print(f"Updating table with {len(model.planned_experiments)} planned experiments")
-            print(f"Round start indices: {round_start_indices}")
-            
-            self.setSortingEnabled(False)
-            
-            # Save current scroll position and selection
-            vscroll = self.verticalScrollBar().value()
-            selected_items = self.selectedItems()
-            selected_exp_ids = []
-            if selected_items:
-                row = selected_items[0].row()
-                id_item = self.item(row, 1)
-                if id_item and id_item.text().isdigit():
-                    selected_exp_ids.append(int(id_item.text()) - 1)
-
-            # First completely clear the table
-            self.clearContents()
+            self.clear_table_signal.emit()
             self.setRowCount(0)
             
-            # Debug column headers
-            headers = [self.horizontalHeaderItem(i).text() if self.horizontalHeaderItem(i) else f"Col {i}"
-                      for i in range(self.columnCount())]
-            print(f"Table columns: {headers}")
+            if not hasattr(model, 'planned_experiments') or not model.planned_experiments:
+                print("No planned experiments found.")
+                return
             
-            # Map experiment ID to round number
-            exp_to_round = {}
-            current_round = 1  # Start from round 1 instead of 0
-            
-            # Create a sorted list of round start indices for easier processing
-            round_boundaries = sorted(round_start_indices)
-            
-            # Assign rounds to experiments
-            for i, _ in enumerate(model.planned_experiments):
-                # Determine round based on round_start_indices
-                round_num = 1
-                for r, start_idx in enumerate(round_boundaries):
-                    if i >= start_idx:
-                        round_num = r + 2  # +2 because round 1 is before the first boundary
+            # Get main window to access current_round
+            main_window = self.get_main_window()
+            if not main_window:
+                print("Warning: Could not find main window")
+                return
                 
-                exp_to_round[i] = round_num
+            # Get filter round (if viewing a specific round)
+            filter_round = getattr(self, 'filter_by_round', None)
+            current_round = filter_round if filter_round is not None else main_window.current_round
             
-            # Track row index for each experiment
-            exp_id_to_row = {}
-            current_display_round = -1
+            # Setup the round selector
+            self.setup_round_selector(main_window, current_round)
             
-            # Fill table with experiments
-            for i, params in enumerate(model.planned_experiments):
-                round_num = exp_to_round.get(i, 1)  # Default to round 1
+            # Calculate indices for current round
+            start_idx = 0
+            end_idx = len(model.planned_experiments)
+            
+            if round_start_indices:
+                # Set start index for this round
+                if current_round > 1 and len(round_start_indices) >= current_round-1:
+                    start_idx = round_start_indices[current_round-2]
                 
-                # Add round separator if needed
-                if current_display_round != round_num:
-                    current_display_round = round_num
-                    separator_row = self.rowCount()
-                    self.insertRow(separator_row)
+                # Set end index for this round
+                if current_round <= len(round_start_indices):
+                    end_idx = round_start_indices[current_round-1]
+            
+            # Get experiments for just this round
+            filtered_experiments = model.planned_experiments[start_idx:end_idx]
+            print(f"Round {current_round}: Showing {len(filtered_experiments)} experiments from {start_idx} to {end_idx}")
+            
+            # Get completed experiments
+            completed_indices = []
+            for i, exp in enumerate(model.experiments):
+                if i < len(model.experiments):
+                    completed_indices.append(i)
                     
-                    separator_item = QTableWidgetItem(f"- Round {round_num} -")
-                    separator_item.setTextAlignment(Qt.AlignCenter)
-                    separator_item.setBackground(QColor(220, 220, 220))
-                    separator_item.setForeground(QColor(80, 80, 80))
-                    
-                    font = separator_item.font()
-                    font.setBold(True)
-                    separator_item.setFont(font)
-                    
-                    self.setSpan(separator_row, 0, 1, self.columnCount())
-                    self.setItem(separator_row, 0, separator_item)
-                    # Make separator non-selectable
-                    separator_item.setFlags(separator_item.flags() & ~Qt.ItemIsSelectable)
+            # Add rows to table for each experiment
+            for i, exp_data in enumerate(filtered_experiments):
+                self.insertRow(i)
                 
-                # Add experiment row
-                row_index = self.rowCount()
-                self.insertRow(row_index)
-                exp_id_to_row[i] = row_index
+                # Global experiment ID
+                exp_id = start_idx + i + 1
                 
-                # Add round number
-                round_item = QTableWidgetItem(str(round_num))
-                round_item.setTextAlignment(Qt.AlignCenter)
-                font = round_item.font()
-                font.setBold(True)
-                round_item.setFont(font)
-                round_item.setFlags(round_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
-                self.setItem(row_index, 0, round_item)
+                # Add round number 
+                round_item = QTableWidgetItem(str(current_round))
+                round_item.setFlags(round_item.flags() & ~Qt.ItemIsEditable)
+                self.setItem(i, 0, round_item)
                 
                 # Add experiment ID
-                id_item = QTableWidgetItem(str(i + 1))
-                id_item.setTextAlignment(Qt.AlignCenter)
-                id_item.setFlags(id_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
-                self.setItem(row_index, 1, id_item)
+                id_item = QTableWidgetItem(str(exp_id))
+                id_item.setFlags(id_item.flags() & ~Qt.ItemIsEditable)
+                self.setItem(i, 1, id_item)
                 
-                # Add parameter values
-                for col, param_name in enumerate(model.parameters.keys(), 2):
-                    value_str = ""
-                    if param_name in params:
-                        value = params[param_name]
-                        if isinstance(value, float):
-                            from ..core import settings
-                            value_str = settings.format_value(value)
+                # Get params from planned experiment - ensure correct structure
+                exp_params = {}
+                if 'params' in exp_data:
+                    # New format with 'params' key
+                    exp_params = exp_data['params']
+                else:
+                    # Old format (parameters directly in experiment dict)
+                    for param_name in model.parameters.keys():
+                        if param_name in exp_data:
+                            exp_params[param_name] = exp_data[param_name]
+                    # Update with structured format to ensure consistency
+                    exp_data['params'] = exp_params
+                
+                # Add parameters
+                for j, param_name in enumerate(model.parameters.keys()):
+                    param_col = j + 2  # parameters start at column 2
+                    param_value = exp_params.get(param_name, "--")
+                    
+                    # Format value appropriately
+                    if isinstance(param_value, float):
+                        param_value_str = f"{param_value:.4g}"
+                    else:
+                        param_value_str = str(param_value)
+                    
+                    param_item = QTableWidgetItem(param_value_str)
+                    param_item.setFlags(param_item.flags() & ~Qt.ItemIsEditable)
+                    self.setItem(i, param_col, param_item)
+                
+                # Add result placeholder for each objective
+                result_col_start = 2 + len(model.parameters)
+                for j, obj in enumerate(model.objectives):
+                    result_col = result_col_start + j
+                    
+                    # Check if this experiment already has results
+                    matching_exp_idx = self._find_matching_planned_experiment(model, exp_data, completed_indices)
+                    
+                    if matching_exp_idx is not None:
+                        # This experiment already has results, show them
+                        result_value = model.experiments[matching_exp_idx].get('results', {}).get(obj)
+                        if result_value is not None:
+                            result_str = f"{result_value*100:.2f}%"
+                            result_item = QTableWidgetItem(result_str)
+                            result_item.setBackground(QColor(224, 255, 224))  # Light green
+                            result_item.setFlags(result_item.flags() & ~Qt.ItemIsEditable)
                         else:
-                            value_str = str(value)
-                    param_item = QTableWidgetItem(value_str)
-                    param_item.setTextAlignment(Qt.AlignCenter if isinstance(params.get(param_name), (int, float)) else Qt.AlignLeft)
-                    param_item.setFlags(param_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
-                    self.setItem(row_index, col, param_item)
-                
-                # Initialize objective columns with empty editable cells
-                for obj_idx, obj_name in enumerate(model.objectives):
-                    obj_col = self.objective_columns_start + obj_idx
-                    obj_item = QTableWidgetItem("")
-                    obj_item.setTextAlignment(Qt.AlignCenter)
-                    # Add visual styling to indicate these cells are editable
-                    obj_item.setToolTip(f"Double-click to enter {obj_name} result")
-                    # These cells should be editable
-                    self.setItem(row_index, obj_col, obj_item)
-                
-                # Initialize prediction column with empty non-editable cell
-                predict_col = self.columnCount() - 1
-                predict_item = QTableWidgetItem("")
-                predict_item.setFlags(predict_item.flags() & ~Qt.ItemIsEditable)  # Make non-editable
-                self.setItem(row_index, predict_col, predict_item)
-            
-            print(f"Added {len(exp_id_to_row)} experiment rows to table")
-            
-            # Process completed experiments
-            completed_indices = set()
-            for exp_idx, exp_data in enumerate(model.experiments):
-                matched_exp_idx = self._find_matching_planned_experiment(model, exp_data, completed_indices)
-                
-                if matched_exp_idx != -1 and matched_exp_idx in exp_id_to_row:
-                    completed_indices.add(matched_exp_idx)
-                    row_index = exp_id_to_row[matched_exp_idx]
+                            result_item = QTableWidgetItem("--")
+                            result_item.setToolTip("Double-click to enter result")
+                    else:
+                        # No results yet
+                        result_item = QTableWidgetItem("--")
+                        result_item.setToolTip("Double-click to enter result")
                     
-                    # Highlight completed experiment row
-                    for col in range(self.columnCount()):
-                        item = self.item(row_index, col)
-                        if item:
-                            item.setBackground(QColor(224, 255, 224))
-                    
-                    # Add result values for each objective
-                    if "results" in exp_data:
-                        for obj_idx, obj_name in enumerate(model.objectives):
-                            obj_col = self.objective_columns_start + obj_idx
-                            if obj_name in exp_data["results"] and exp_data["results"][obj_name] is not None:
-                                obj_value = exp_data["results"][obj_name] * 100.0
-                                obj_item = QTableWidgetItem(f"{obj_value:.2f}%")
-                                obj_item.setTextAlignment(Qt.AlignCenter)
-                                obj_item.setBackground(QColor(224, 255, 224))
-                                self.setItem(row_index, obj_col, obj_item)
-            
-            print(f"Processed {len(completed_indices)} completed experiments")
-            
-            # Make sure the widget is updated
-            self.viewport().update()
-            
-            # Restore scroll position and selection
-            self.verticalScrollBar().setValue(vscroll)
-            for exp_id in selected_exp_ids:
-                if exp_id in exp_id_to_row:
-                    self.selectRow(exp_id_to_row[exp_id])
+                    self.setItem(i, result_col, result_item)
                 
-            # Re-enable signals and sorting
-            self.setSortingEnabled(True)
-            self.blockSignals(False)
+                # Add prediction placeholder
+                predict_col = result_col_start + len(model.objectives)
+                predict_item = QTableWidgetItem("--")
+                predict_item.setFlags(predict_item.flags() & ~Qt.ItemIsEditable)
+                self.setItem(i, predict_col, predict_item)
+            
+            # Enable prediction calculation if we have completed experiments
+            if completed_indices:
+                exp_id_to_row = {start_idx + i + 1: i for i in range(len(filtered_experiments))}
+                self._async_update_predictions(model, completed_indices, exp_id_to_row)
+            
+            self.resizeColumnsToContents()
             
         except Exception as e:
             import traceback
             print(f"Error in update_from_planned: {e}")
-            traceback.print_exc()
-            self.blockSignals(False)
-
-    def _find_matching_planned_experiment(self, model, exp_data, completed_indices):
-        """Find the planned experiment that matches the experiment data."""
-        if 'params' not in exp_data:
-            return -1
+            print(traceback.format_exc())
+    
+    def setup_round_selector(self, main_window, current_round):
+        """Set up the round selector widget properly attached to main window"""
+        max_round = main_window.current_round
         
-        for planned_idx, planned_params in enumerate(model.planned_experiments):
-            if planned_idx in completed_indices:
-                continue
+        # Find appropriate experiment tab parent
+        experiment_tab = None
+        if hasattr(main_window, 'tab_widget'):
+            for i in range(main_window.tab_widget.count()):
+                if main_window.tab_widget.tabText(i) == "Experiments":
+                    experiment_tab = main_window.tab_widget.widget(i)
+                    break
+        
+        # If we already have a round selector widget, just update it
+        if hasattr(self, 'round_selector') and self.round_selector:
+            # Update without triggering signals
+            self.round_selector.blockSignals(True)
+            self.round_selector.clear()
+            for r in range(1, max_round+1):
+                self.round_selector.addItem(f"Round {r}")
             
-            # Check if parameters match
-            params_match = True
-            for param_name, planned_value in planned_params.items():
-                if param_name not in exp_data['params']:
-                    params_match = False
+            # Make sure we select the correct round
+            if current_round >= 1 and current_round <= max_round:
+                self.round_selector.setCurrentIndex(current_round-1)
+            self.round_selector.blockSignals(False)
+            
+            # Make sure it's visible
+            if hasattr(self, 'round_select_widget'):
+                self.round_select_widget.setVisible(max_round > 1)
+            return
+            
+        # Create new round selector
+        if experiment_tab:
+            # Create a more prominent widget with better styling
+            self.round_select_widget = QWidget(experiment_tab)
+            self.round_select_widget.setObjectName("RoundSelectorWidget")
+            round_select_layout = QHBoxLayout(self.round_select_widget)
+            round_select_layout.setContentsMargins(5, 5, 5, 5)
+            round_select_layout.setSpacing(10)
+            
+            # Add a more descriptive label
+            round_label = QLabel("<b>View Experiment Round:</b>")
+            round_select_layout.addWidget(round_label)
+            
+            # Create the combo box with improved styling
+            self.round_selector = QComboBox()
+            self.round_selector.setMinimumWidth(150)
+            self.round_selector.setObjectName("RoundSelector")
+            self.round_selector.setStyleSheet("""
+                QComboBox {
+                    padding: 4px 8px;
+                    border: 1px solid #999;
+                    border-radius: 4px;
+                    background-color: #f8f8f8;
+                }
+                QComboBox:hover {
+                    border-color: #4CAF50;
+                    background-color: #f0f8f0;
+                }
+                QComboBox::drop-down {
+                    width: 20px;
+                }
+            """)
+            
+            # Add rounds
+            for r in range(1, max_round+1):
+                self.round_selector.addItem(f"Round {r}")
+            
+            # Make sure we select the correct round
+            if current_round >= 1 and current_round <= max_round:
+                self.round_selector.setCurrentIndex(current_round-1)
+            
+            # Connect directly to main window with a more robust connection
+            def on_round_selected(index):
+                selected_round = index + 1
+                # Get a fresh reference to the main window each time
+                main_win = self.get_main_window()
+                if main_win and hasattr(main_win, 'view_selected_round'):
+                    main_win.view_selected_round(selected_round)
+                else:
+                    print("Warning: Could not find main window or view_selected_round method")
+            
+            # Disconnect any existing connections first
+            try:
+                self.round_selector.currentIndexChanged.disconnect()
+            except:
+                pass  # No existing connections
+                
+            self.round_selector.currentIndexChanged.connect(on_round_selected)
+            round_select_layout.addWidget(self.round_selector)
+            
+            # Add a help button to explain round navigation
+            help_btn = QPushButton("?")
+            help_btn.setMaximumWidth(30)
+            help_btn.setToolTip("Click to learn about experiment rounds")
+            help_btn.clicked.connect(lambda: QMessageBox.information(self, 
+                "Experiment Rounds", 
+                "You can navigate between different rounds of experiments.\n\n"
+                "• Previous rounds are locked (read-only)\n"
+                "• Current round is editable\n"
+                "• All rounds are included in analysis and predictions"))
+            round_select_layout.addWidget(help_btn)
+            
+            # Only show the selector if we have multiple rounds
+            self.round_select_widget.setVisible(max_round > 1)
+            
+            # Find experiment content layout and place at the top
+            content_layout = None
+            for layout in experiment_tab.findChildren(QVBoxLayout):
+                if layout.objectName() == "experiment_content_layout":
+                    content_layout = layout
                     break
-                
-                exp_value = exp_data['params'][param_name]
-                
-                # Compare values based on parameter type
-                param = model.parameters.get(param_name)
-                if not param:
-                    continue
-                
-                if param.param_type == 'continuous':
-                    # Allow small floating point differences
-                    if abs(float(planned_value) - float(exp_value)) > 1e-6:
-                        params_match = False
+            
+            # If we found the layout, insert at the beginning
+            if content_layout:
+                if content_layout.count() > 0:
+                    content_layout.insertWidget(0, self.round_select_widget)
+                else:
+                    content_layout.addWidget(self.round_select_widget)
+            else:
+                # Fallback - find a layout that contains this table
+                parent_widget = self.parent()
+                while parent_widget and not isinstance(parent_widget, QVBoxLayout):
+                    if hasattr(parent_widget, 'layout') and isinstance(parent_widget.layout(), QVBoxLayout):
+                        parent_widget.layout().insertWidget(0, self.round_select_widget)
                         break
-                elif planned_value != exp_value:
-                    params_match = False
-                    break
-                
-            if params_match:
-                return planned_idx
-        
-        return -1
+                    parent_widget = parent_widget.parent()
 
     def _async_update_predictions(self, model, completed_indices, exp_id_to_row):
-        self._prediction_start_time = time.time()
-        if self._prediction_future and not self._prediction_future.done():
-            self._prediction_future.cancel()
-        self._prediction_future = self.executor.submit(
-            self._calculate_predictions, model, completed_indices, exp_id_to_row
-        )
-        # Add timeout watchdog timer
-        QTimer.singleShot(5000, lambda: self._check_prediction_timeout())
+        """Start async calculation of predictions with proper error handling"""
+        try:
+            self._prediction_start_time = time.time()
+            if hasattr(self, '_prediction_future') and self._prediction_future and not self._prediction_future.done():
+                self._prediction_future.cancel()
+                
+            # Make sure executor exists
+            if not hasattr(self, 'executor') or self.executor is None or self.executor._shutdown:
+                import concurrent.futures
+                self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                
+            # Submit the task
+            self._prediction_future = self.executor.submit(
+                self._calculate_predictions, model, completed_indices, exp_id_to_row
+            )
+            # Add timeout watchdog timer
+            QTimer.singleShot(5000, lambda: self._check_prediction_timeout())
+        except Exception as e:
+            print(f"Error starting prediction calculation: {e}")
+            import traceback
+            print(traceback.format_exc())
 
     def _check_prediction_timeout(self):
-        if self._prediction_future and not self._prediction_future.done():
-            if time.time() - self._prediction_start_time > 5.0:
-                self._prediction_future.cancel()
-                self.log(" Warning: Prediction calculation timed out - using simple interpolation")
-                # Fall back to simpler method
-                # [implementation omitted for brevity]
+        """Check if prediction calculation has timed out and cancel if needed"""
+        try:
+            if hasattr(self, '_prediction_future') and self._prediction_future and not self._prediction_future.done():
+                if time.time() - self._prediction_start_time > 5.0:
+                    self._prediction_future.cancel()
+                    print("Warning: Prediction calculation timed out - using simple interpolation")
+                    # Fall back to simpler method if needed
+            
+            # Clean up completed futures to prevent memory leaks
+            if hasattr(self, '_prediction_future') and self._prediction_future and self._prediction_future.done():
+                try:
+                    # Extract any exceptions without raising them
+                    exception = self._prediction_future.exception(timeout=0)
+                    if exception:
+                        print(f"Prediction calculation failed: {exception}")
+                except (concurrent.futures.TimeoutError, concurrent.futures.CancelledError):
+                    pass
+                
+                # Clear the reference
+                self._prediction_future = None
+        except Exception as e:
+            print(f"Error in prediction timeout check: {e}")
 
     def optimize_update_from_planned(self):
         """Optimize table update for large experiments."""
@@ -923,6 +1065,255 @@ class ExperimentTable(QTableWidget):
         
         if parent and hasattr(parent, 'log'):
             parent.log(message)
+
+    def _find_matching_planned_experiment(self, model, exp_data, completed_indices):
+        """Find a matching completed experiment for a planned experiment."""
+        if not model.experiments or not completed_indices:
+            return None
+        
+        # Get parameter values from this planned experiment
+        planned_params = exp_data.get('params', {})
+        if not planned_params:
+            # Handle old format where parameters are at top level
+            for param_name in model.parameters.keys():
+                if param_name in exp_data:
+                    planned_params[param_name] = exp_data[param_name]
+        
+        if not planned_params:
+            return None
+        
+        # For each completed experiment, check if parameters match
+        for idx in completed_indices:
+            if idx >= len(model.experiments):
+                continue
+            
+            completed_exp = model.experiments[idx]
+            completed_params = completed_exp.get('params', {})
+            
+            # Handle legacy format where parameters are at top level
+            if not completed_params:
+                completed_params = {}
+                for param_name in model.parameters.keys():
+                    if param_name in completed_exp:
+                        completed_params[param_name] = completed_exp[param_name]
+            
+            # Check if all parameter values match
+            all_match = True
+            for param_name, planned_value in planned_params.items():
+                if param_name not in completed_params:
+                    all_match = False
+                    break
+                
+                completed_value = completed_params[param_name]
+                
+                # Compare values with tolerance for floating point
+                if isinstance(planned_value, float) and isinstance(completed_value, float):
+                    if abs(planned_value - completed_value) > 1e-6:
+                        all_match = False
+                        break
+                elif planned_value != completed_value:
+                    all_match = False
+                    break
+                
+            if all_match:
+                return idx
+            
+        return None
+
+    def _calculate_predictions(self, model, completed_indices, exp_id_to_row):
+        """Calculate predictions for experiments in background thread."""
+        try:
+            # Skip if no completed experiments
+            if not completed_indices:
+                return
+            
+            # Prepare data for training surrogate model
+            X_train = []
+            y_train = []
+            
+            for idx in completed_indices:
+                if idx >= len(model.experiments):
+                    continue
+                
+                exp = model.experiments[idx]
+                if 'params' not in exp or 'results' not in exp:
+                    continue
+                
+                # Extract parameter values
+                x_values = []
+                for param_name in model.parameters.keys():
+                    if param_name in exp['params']:
+                        param = model.parameters[param_name]
+                        value = exp['params'][param_name]
+                        
+                        # Normalize categorical values
+                        if param.param_type == 'categorical':
+                            if value in param.choices:
+                                value = param.choices.index(value) / (len(param.choices) - 1) if len(param.choices) > 1 else 0.5
+                            else:
+                                value = 0.5
+                        # Normalize continuous/discrete values
+                        elif param.param_type in ['continuous', 'discrete']:
+                            value = (value - param.low) / (param.high - param.low) if param.high > param.low else 0.5
+                        
+                        x_values.append(value)
+                    else:
+                        x_values.append(0.5)  # Default value if missing
+                
+                # Calculate composite score
+                score = exp.get('score')
+                if score is None:
+                    score = model._calculate_composite_score(exp.get('results', {}))
+                
+                if score is not None:
+                    X_train.append(x_values)
+                    y_train.append(score)
+            
+            # Train a simple model
+            if len(X_train) < 3 or len(y_train) < 3:
+                return
+            
+            # Convert to numpy arrays
+            X_train = np.array(X_train)
+            y_train = np.array(y_train)
+            
+            # Train a simple linear model (we could use more sophisticated models later)
+            from sklearn.linear_model import Ridge
+            reg = Ridge(alpha=1.0)
+            reg.fit(X_train, y_train)
+            
+            # Predict for each experiment in the current view
+            for exp_id, row in exp_id_to_row.items():
+                if exp_id <= 0 or exp_id > len(model.planned_experiments):
+                    continue
+                
+                exp = model.planned_experiments[exp_id - 1]
+                if 'params' not in exp:
+                    continue
+                
+                # Extract parameter values
+                x_values = []
+                for param_name in model.parameters.keys():
+                    if param_name in exp['params']:
+                        param = model.parameters[param_name]
+                        value = exp['params'][param_name]
+                        
+                        # Normalize categorical values
+                        if param.param_type == 'categorical':
+                            if value in param.choices:
+                                value = param.choices.index(value) / (len(param.choices) - 1) if len(param.choices) > 1 else 0.5
+                            else:
+                                value = 0.5
+                        # Normalize continuous/discrete values
+                        elif param.param_type in ['continuous', 'discrete']:
+                            value = (value - param.low) / (param.high - param.low) if param.high > param.low else 0.5
+                        
+                        x_values.append(value)
+                    else:
+                        x_values.append(0.5)  # Default value if missing
+                
+                # Make prediction
+                x_pred = np.array([x_values])
+                prediction = reg.predict(x_pred)[0]
+                
+                # Store prediction in a closure that can be called from main thread
+                prediction_row = row
+                prediction_value = prediction
+                
+                # Update UI with prediction (in main thread)
+                def update_prediction():
+                    if prediction_row < self.rowCount():
+                        predict_col = self.param_columns_end + len(model.objectives) + 1
+                        predict_item = self.item(prediction_row, predict_col)
+                        if predict_item:
+                            predict_item.setText(f"{prediction_value*100:.1f}%")
+                            if prediction_value > 0.7:
+                                predict_item.setBackground(QColor(200, 255, 200))  # Green for good predictions
+                            elif prediction_value > 0.5:
+                                predict_item.setBackground(QColor(255, 255, 200))  # Yellow for medium
+                            else:
+                                predict_item.setBackground(QColor(255, 200, 200))  # Red for poor
+                
+                # Store the update function and row value as an attribute to avoid it being garbage collected
+                prediction_id = f"prediction_{exp_id}"
+                setattr(self, prediction_id, (update_prediction, prediction_row, prediction_value))
+                
+                # Execute in main thread - using the correct signature for invokeMethod
+                from PySide6.QtCore import QMetaObject, Qt
+                QMetaObject.invokeMethod(self, "_apply_prediction", Qt.QueuedConnection,
+                                        Qt.Q_ARG(str, prediction_id))
+        
+        except Exception as e:
+            import traceback
+            print(f"Error calculating predictions: {e}")
+            print(traceback.format_exc())
+
+    def _apply_prediction(self, prediction_id):
+        """Helper method to be called via invokeMethod that applies a prediction update"""
+        if hasattr(self, prediction_id):
+            update_func, row, value = getattr(self, prediction_id)
+            update_func()
+            # Clean up after applying
+            delattr(self, prediction_id)
+
+    def commit_pending_changes(self):
+        """Commit any pending changes to the model when switching between rounds"""
+        try:
+            if not self.model:
+                return
+                
+            # Force end of any current edits
+            self.clearFocus()
+            
+            # Forcibly apply any active editor
+            if self.state() == QTableWidget.EditingState:
+                self.commitData(self.currentEditor())
+                self.closeEditor(self.currentEditor(), QTableWidget.EndEditHint.SubmitModelCache)
+            
+            # Check for any highlighted cells that might indicate unsaved changes
+            highlighted_cells = []
+            for row in range(self.rowCount()):
+                for col in range(self.objective_columns_start, self.objective_columns_end + 1):
+                    item = self.item(row, col)
+                    if item and item.background().color().name() == QColor(224, 255, 224).name():
+                        highlighted_cells.append((row, col))
+            
+            # Process any highlighted cells to ensure their data is in the model
+            for row, col in highlighted_cells:
+                item = self.item(row, col)
+                if item and item.text():
+                    # Check if this data is already in the model
+                    id_item = self.item(row, 1)
+                    if id_item and id_item.text().isdigit():
+                        exp_id = int(id_item.text()) - 1
+                        if exp_id >= 0 and exp_id < len(self.model.planned_experiments):
+                            # Get the corresponding objective
+                            col_idx = col - self.objective_columns_start
+                            if col_idx < 0 or col_idx >= len(self.model.objectives):
+                                continue
+                                
+                            objective_name = self.model.objectives[col_idx]
+                            
+                            # Check if we need to update the model
+                            text_value = item.text().strip()
+                            if text_value and '%' in text_value:
+                                # Already has a percentage format - should be in the model
+                                continue
+                                
+                            # Trigger a cell change event to update the model
+                            item.setText(item.text())  # Force refresh
+            
+            # Clear any temporary highlights
+            self.clearSelection()
+            
+            # Return True to indicate success
+            return True
+            
+        except Exception as e:
+            import traceback
+            print(f"Error committing pending changes: {e}")
+            print(traceback.format_exc())
+            return False
 
 class BestResultsTable(QTableWidget):
     def __init__(self, parent=None):

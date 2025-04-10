@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 from ..visualizations import plot_parameter_importance
 from .canvas import MplCanvas
 from ..core import settings
+import datetime
 
 class ParameterDialog(QDialog):
     def __init__(self, parent=None, param=None, edit_mode=False):
@@ -209,7 +210,22 @@ class ResultDialog(QDialog):
         super().__init__(parent)
         self.model = model
         self.exp_id = exp_id
-        self.params = params
+        
+        # Ensure params has the correct structure - make a deep copy to avoid modifying the original
+        self.params = {}
+        
+        # Handle both new format (with 'params' dict) and old format
+        if isinstance(params, dict):
+            if 'params' in params:
+                # New format - deep copy the params dict
+                import copy
+                self.params = copy.deepcopy(params['params'])
+            else:
+                # Old format - copy all parameter values
+                for param_name in model.parameters:
+                    if param_name in params:
+                        self.params[param_name] = params[param_name]
+        
         self.result = None
         
         self.setWindowTitle(f"Add Result for Experiment #{exp_id+1}")
@@ -253,9 +269,20 @@ class ResultDialog(QDialog):
         
         for obj in self.model.objectives:
             spin = QDoubleSpinBox()
-            spin.setRange(0, 100)
-            spin.setSuffix(" %")
-            spin.setDecimals(settings.rounding_precision)
+            # Use more reasonable range and better defaults
+            spin.setRange(0.0, 100.0)  # Allow values from 0% to 100%
+            spin.setSingleStep(1.0)     # Step by 1% when using arrows
+            spin.setValue(0.0)          # Start with 0 value
+            spin.setSuffix(" %")        # Show percentage symbol
+            spin.setDecimals(2)         # Show 2 decimal places for precision
+            spin.setFixedWidth(120)     # Make size consistent
+            
+            # Use Qt's built-in validation instead of manual validation
+            spin.setStepType(QDoubleSpinBox.AdaptiveDecimalStepType)
+            spin.setAccelerated(True)
+            
+            # Connect to valueChanged to enable the OK button properly
+            spin.valueChanged.connect(self.check_enable_button)
             
             result_layout.addRow(f"{obj.capitalize()}:", spin)
             self.result_spins[obj] = spin
@@ -282,23 +309,57 @@ class ResultDialog(QDialog):
         
         layout.addLayout(button_box)
         
-    def accept(self):
-        results = {}
-        
+        # Check initial state
+        self.check_enable_button()
+    
+    def check_enable_button(self):
+        """Enable the OK button only if at least one result is non-zero"""
+        has_valid_result = False
         for obj, spin in self.result_spins.items():
-            value = spin.value()
-            results[obj] = value / 100.0
-            
-        notes = self.notes_edit.toPlainText().strip()
-        if notes:
-            self.params["notes"] = notes
-            
-        self.result = {
-            "params": self.params,
-            "results": results
-        }
+            if spin.value() > 0:
+                has_valid_result = True
+                break
         
-        super().accept()
+        self.ok_button.setEnabled(has_valid_result)
+        
+    def accept(self):
+        try:
+            results = {}
+            
+            for obj, spin in self.result_spins.items():
+                # Get value and normalize to 0-1 range (from percentage)
+                value = spin.value() / 100.0
+                # Ensure it's within valid range
+                value = max(0.0, min(1.0, value))
+                results[obj] = value
+                
+            notes = self.notes_edit.toPlainText().strip()
+            
+            # Create a deep copy of params to avoid reference issues
+            import copy
+            params_copy = copy.deepcopy(self.params)
+            
+            if notes:
+                params_copy["notes"] = notes
+                
+            # Create properly structured result dictionary
+            self.result = {
+                "params": params_copy,
+                "results": results,
+                "timestamp": datetime.datetime.now().isoformat()
+            }
+            
+            super().accept()
+        except Exception as e:
+            import traceback
+            print(f"Error accepting result: {e}")
+            print(traceback.format_exc())
+            
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to add result: {str(e)}\n\nMake sure all values are valid numbers."
+            )
 
 class TemplateSelector(QDialog):
     def __init__(self, parent=None):

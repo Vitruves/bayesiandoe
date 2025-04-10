@@ -11,28 +11,57 @@ def log(self, message):
     QApplication.processEvents()
 
 def update_ui_from_model(self):
+    """Update all UI components to reflect the current model state"""
+    # First update parameter table
     self.param_table.update_from_model(self.model)
+    
+    # Update prior knowledge UI
     update_prior_table(self)
     update_parameter_combos(self)
     update_prior_param_buttons(self)
-    self.experiment_table.update_columns(self.model)
-    self.experiment_table.update_from_planned(self.model, self.round_start_indices)
-    self.best_table.update_columns(self.model)
-    self.best_table.update_from_model(self.model, self.n_best_spin.value())
-    self.all_results_table.update_from_model(self.model)
     
-    self.current_round_label.setText(str(self.current_round))
-    if self.model.experiments and self.model.planned_experiments:
+    # Ensure experiment table has correct columns before updating data
+    self.experiment_table.update_columns(self.model)
+    
+    # Clear existing data to ensure clean update
+    if hasattr(self.experiment_table, 'clear_table_signal'):
+        self.experiment_table.clear_table_signal.emit()
+    
+    # Update experiment table with planned experiments
+    if not hasattr(self, 'round_start_indices'):
+        self.round_start_indices = []
+    self.experiment_table.update_from_planned(self.model, self.round_start_indices)
+    
+    # Update results tables
+    if hasattr(self, 'best_table'):
+        self.best_table.update_columns(self.model)
+        self.best_table.update_from_model(self.model, self.n_best_spin.value() if hasattr(self, 'n_best_spin') else 5)
+    
+    if hasattr(self, 'all_results_table'):
+        self.all_results_table.update_from_model(self.model)
+    
+    # Update round display
+    if hasattr(self, 'current_round_label'):
+        self.current_round_label.setText(str(self.current_round))
+    
+    # Update experiment count display
+    if hasattr(self, 'results_count_label') and self.model.experiments and hasattr(self.model, 'planned_experiments'):
         self.results_count_label.setText(f"{len(self.model.experiments)} / {len(self.model.planned_experiments)}")
-        self.total_exp_label.setText(str(len(self.model.planned_experiments)))
-        
-    completed = len(self.model.experiments)
-    total = len(self.model.planned_experiments) if self.model.planned_experiments else 0
-    if total > 0:
-        progress = int(100 * completed / total)
-        self.progress_bar.setValue(progress)
-    else:
-        self.progress_bar.setValue(0)
+        if hasattr(self, 'total_exp_label'):
+            self.total_exp_label.setText(str(len(self.model.planned_experiments)))
+    
+    # Update progress bar
+    if hasattr(self, 'progress_bar'):
+        completed = len(self.model.experiments)
+        total = len(self.model.planned_experiments) if hasattr(self.model, 'planned_experiments') else 0
+        if total > 0:
+            progress = int(100 * completed / total)
+            self.progress_bar.setValue(progress)
+        else:
+            self.progress_bar.setValue(0)
+    
+    # Update best result display
+    update_best_result_label(self)
 
 def update_parameter_combos(self):
     prior_param = self.prior_param_combo.currentText() if hasattr(self, 'prior_param_combo') and self.prior_param_combo.count() > 0 else ""

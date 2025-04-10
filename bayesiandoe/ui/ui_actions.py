@@ -1,4 +1,5 @@
 import os
+import time
 import numpy as np
 import pandas as pd
 from PySide6.QtCore import Qt, QTimer
@@ -8,7 +9,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QFormLayout, QLineEdit, QTextEdit, QGridLayout,
     QGroupBox, QSlider, QListWidgetItem, QTabWidget, QWidget,
     QTableWidget, QComboBox, QCheckBox, QHeaderView, QScrollArea,
-    QFrame, QRadioButton
+    QFrame, QRadioButton, QApplication, QProgressDialog
 )
 from PySide6.QtGui import QColor, QFont, QPixmap, QImage
 
@@ -518,155 +519,208 @@ def add_substrate_parameter(self):
         log(self, f" Substrate '{substrate_name.strip()}' added - Success")
 
 def generate_initial_experiments(self):
-    try:
-        n_experiments = self.n_initial_spin.value()
+    """Generate initial experiment set based on current parameters and settings"""
+    n_initial = self.n_initial_spin.value()
+    
+    # Check if parameters are defined
+    if not self.model.parameters:
+        QMessageBox.warning(self, "Warning", "Please define at least one parameter before generating experiments.")
+        return
         
-        if not self.model.parameters:
-            self.log(" No parameters defined. Add parameters first - Error")
-            return
-            
-        if not self.model.objectives:
-            self.log(" No objectives defined. Define objectives first - Error")
-            return
-            
-        # Generate initial experiments
-        method = self.design_method_combo.currentText().lower()
-        self.log(f" Using {method} design method")
-        
-        # Update model's design method
-        self.model.design_method = method
-        
-        # Clear any existing planned experiments
-        if hasattr(self.model, 'planned_experiments'):
-            self.model.planned_experiments = []
-        else:
-            self.model.planned_experiments = []
-            
-        # Reset round indices
+    # Check if objectives are defined
+    if not self.model.objectives:
+        QMessageBox.warning(self, "Warning", "Please define at least one objective before generating experiments.")
+        return
+    
+    # Store the selected design method 
+    method = self.design_method_combo.currentText().lower()
+    self.model.design_method = method
+    
+    self.log(f" Generating {n_initial} initial experiments using {method} design - Started")
+    
+    # Make sure round_start_indices is initialized
+    if not hasattr(self, 'round_start_indices'):
         self.round_start_indices = []
+    
+    # Show progress dialog
+    progress = QProgressDialog("Generating initial experiments...", "Cancel", 0, 100, self)
+    progress.setWindowModality(Qt.WindowModal)
+    progress.show()
+    QApplication.processEvents()
+    
+    try:
+        # Generate initial experiments
+        progress.setValue(20)
+        QApplication.processEvents()
         
-        # Call the appropriate suggestion method based on design method
-        if method == "botorch":
-            suggestions = self.model._suggest_with_botorch(n_experiments)
-        elif method == "tpe":
-            suggestions = self.model._suggest_with_tpe(n_experiments)
-        elif method == "gpei":
-            suggestions = self.model._suggest_with_gp(n_experiments)
-        elif method == "random":
-            suggestions = self.model._suggest_random(n_experiments)
-        elif method == "latin hypercube":
-            suggestions = self.model._suggest_with_lhs(n_experiments)
-        elif method == "sobol":
-            suggestions = self.model._suggest_with_sobol(n_experiments)
-        else:
-            # Default to BoTorch if method not recognized
-            self.log(f" Unknown design method '{method}', using BoTorch - Warning")
-            suggestions = self.model._suggest_with_botorch(n_experiments)
-            
-        self.model.planned_experiments = suggestions
+        # Track suggestion time for performance monitoring
+        self.model._suggestion_start_time = time.time()
+        initial_experiments = self.model.suggest_experiments(n_initial)
+        suggestion_time = time.time() - self.model._suggestion_start_time
+        
+        progress.setValue(80)
+        QApplication.processEvents()
+        
+        # Verify the structure of experiments
+        for i, exp in enumerate(initial_experiments):
+            if 'params' not in exp:
+                exp['params'] = {}
+                # Copy parameters from top level
+                for param_name in self.model.parameters:
+                    if param_name in exp:
+                        exp['params'][param_name] = exp[param_name]
+        
+        # Store the experiments in the model
+        self.model.planned_experiments = initial_experiments
         self.current_round = 1
         self.current_round_label.setText("1")
         
-        # Update the UI
-        update_ui_from_model(self)
+        # Always close the progress dialog before updating UI
+        progress.close()
         
-        self.log(f" Generated {n_experiments} initial experiments with {method.upper()} sampling - Success")
+        # Reset any filters and clear previous experiment data
+        if hasattr(self.experiment_table, 'filter_by_round'):
+            self.experiment_table.filter_by_round = 1  # Force current round view
+        
+        # Make sure the surrogate cache is cleared after generating new experiments
+        if hasattr(self.model, 'clear_surrogate_cache'):
+            self.model.clear_surrogate_cache()
+        
+        # Update experiment table - direct call to update UI
+        self.experiment_table.update_from_planned(self.model, self.round_start_indices)
+        
+        # Calculate time per experiment for logging
+        time_per_exp = suggestion_time / n_initial if n_initial > 0 else 0
+        self.log(f" Generated {n_initial} initial experiments with {method} design in {suggestion_time:.2f}s ({time_per_exp:.3f}s per exp) - Success")
         
     except Exception as e:
+        # Make sure to close the progress dialog on error
+        progress.close()
+        
         import traceback
-        traceback.print_exc()
-        self.log(f" Failed to generate experiments: {str(e)} - Error")
+        error_details = traceback.format_exc()
+        self.log(f" Failed to generate initial experiments: {str(e)} - Error")
+        print(f"Error details: {error_details}")
+        
+        # Show error dialog to user
+        error_box = QMessageBox(self)
+        error_box.setIcon(QMessageBox.Critical)
+        error_box.setWindowTitle("Error Generating Experiments")
+        error_box.setText("Failed to generate initial experiments")
+        error_box.setDetailedText(error_details)
+        error_box.exec()
 
 def generate_next_experiments(self):
-    """Generate the next round of experiments"""
-    from ..core import settings
+    if not self.model.experiments:
+        QMessageBox.warning(self, "Warning", "You must complete at least one experiment before generating next experiments.")
+        return
+        
+    # Lock previous round results before creating new round
+    current_exp_count = len(self.model.experiments)
+    planned_exp_count = len(self.model.planned_experiments) if self.model.planned_experiments else 0
     
-    # Get number of new experiments to generate
+    # Save current round boundary for later reference
+    self.round_start_indices.append(planned_exp_count)
+    
+    # Record completed round in model for persistence
+    if not hasattr(self.model, 'completed_rounds'):
+        self.model.completed_rounds = []
+    
+    self.model.completed_rounds.append({
+        'round': self.current_round,
+        'experiments': self.model.experiments[:current_exp_count],
+        'start_index': self.round_start_indices[-1]
+    })
+    
     n_next = self.n_next_spin.value()
     
-    # Set exploitation weight based on slider
-    exploitation_weight = self.exploit_slider.value() / 100.0
-    self.model.exploitation_weight = exploitation_weight
+    # Store the selected design method
+    method = self.design_method_combo.currentText().lower()
+    self.model.design_method = method
+    
+    # Set exploitation weight from slider
+    if hasattr(self, 'exploit_slider'):
+        self.model.exploitation_weight = self.exploit_slider.value() / 100.0
+    
+    self.log(f" Generating {n_next} next experiments using {method} design - Started")
+    
+    # Show progress dialog
+    progress = QProgressDialog("Generating optimized experiments...", "Cancel", 0, 100, self)
+    progress.setWindowModality(Qt.WindowModal)
+    progress.setMinimumDuration(500)
+    progress.setValue(10)
+    QApplication.processEvents()
+    
+    # Lock current experiments before generating new ones
+    for i, exp in enumerate(self.model.experiments):
+        if 'locked' not in exp:
+            exp['locked'] = True
+            exp['round'] = self.current_round
     
     try:
-        # Store initial count for tracking
-        initial_count = len(self.model.planned_experiments)
-        print(f"Before adding: {initial_count} planned experiments")
+        # Update model with current settings
+        for setting in getattr(self, 'optimization_settings', []):
+            if hasattr(self.model, setting):
+                value = getattr(self, f"{setting}_value", None)
+                if value is not None:
+                    setattr(self.model, setting, value)
         
-        # Generate new suggestions
-        method = self.design_method_combo.currentText().lower()
+        # Generate next experiment suggestions
+        progress.setValue(20)
+        QApplication.processEvents()
         
-        # Get start time for performance measurement
-        import time
-        start_time = time.time()
+        # Make sure the surrogate cache is cleared before generating new experiments
+        if hasattr(self.model, 'clear_surrogate_cache'):
+            self.model.clear_surrogate_cache()
         
-        # Call the appropriate suggestion method based on design method
-        if method == "botorch":
-            suggestions = self.model._suggest_with_botorch(n_next)
-        elif method == "tpe":
-            suggestions = self.model._suggest_with_tpe(n_next)
-        elif method == "gpei":
-            suggestions = self.model._suggest_with_gp(n_next)
-        elif method == "random":
-            suggestions = self.model._suggest_random(n_next)
-        elif method == "latin hypercube":
-            suggestions = self.model._suggest_with_lhs(n_next)
-        elif method == "sobol":
-            suggestions = self.model._suggest_with_sobol(n_next)
-        else:
-            # Default to BoTorch if method not recognized
-            self.log(f" Unknown design method '{method}', using BoTorch - Warning")
-            suggestions = self.model._suggest_with_botorch(n_next)
-            
+        self.model._suggestion_start_time = time.time()
+        next_experiments = self.model.suggest_experiments(n_next)
+        suggestion_time = time.time() - self.model._suggestion_start_time
+        
+        progress.setValue(80)
+        QApplication.processEvents()
+        
+        # Verify the structure of experiments
+        for i, exp in enumerate(next_experiments):
+            if 'params' not in exp:
+                exp['params'] = {}
+                # Copy parameters from top level
+                for param_name in self.model.parameters:
+                    if param_name in exp:
+                        exp['params'][param_name] = exp[param_name]
+        
+        # Always close the progress dialog before updating UI
+        progress.close()
+        
         # Add suggestions to planned experiments
-        self.model.planned_experiments.extend(suggestions)
+        self.model.planned_experiments.extend(next_experiments)
         
-        # Log timing
-        elapsed = time.time() - start_time
-        self.log(f" Generated {n_next} suggestions in {elapsed:.2f}s")
+        # Increment round number
+        self.current_round += 1
+        self.current_round_label.setText(str(self.current_round))
         
-        final_count = len(self.model.planned_experiments)
-        print(f"After adding: {final_count} planned experiments")
+        # Reset any filters before updating
+        if hasattr(self.experiment_table, 'filter_by_round'):
+            self.experiment_table.filter_by_round = self.current_round
         
-        # If suggestions were returned, update UI
-        if suggestions and len(suggestions) > 0:
-            print(f"Generated {len(suggestions)} new suggestions")
-            
-            # Update round start indices - record the index where the new round starts
-            self.round_start_indices.append(initial_count)
-            
-            # Increment round number
-            self.current_round += 1
-            self.current_round_label.setText(str(self.current_round))
-            
-            # Update experiment table
-            self.experiment_table.update_from_planned(self.model, self.round_start_indices)
-            
-            log(self, f" Generated {n_next} experiments for round {self.current_round} - Success")
-        else:
-            # Handle case where no suggestions were returned
-            log(self, f" No experiments generated. Check parameters and try again - Warning")
+        # Update experiment table
+        self.experiment_table.update_from_planned(self.model, self.round_start_indices)
+        
+        log(self, f" Generated {n_next} experiments for round {self.current_round} - Success")
     except Exception as e:
+        # Make sure to close the progress dialog on error
+        progress.close()
+        
         import traceback
         error_details = traceback.format_exc()
         log(self, f" Failed to generate experiments: {str(e)} - Error")
+        print(f"Error details: {error_details}")
         
-        # Show error dialog to user with helpful message
-        from PySide6.QtWidgets import QMessageBox
+        # Show error dialog to user
         error_box = QMessageBox(self)
         error_box.setIcon(QMessageBox.Critical)
         error_box.setWindowTitle("Error Generating Experiments")
         error_box.setText("Failed to generate next experiments")
-        
-        # Provide a more specific message based on the error type
-        if "X_pending" in str(e):
-            error_box.setInformativeText(
-                "The optimization algorithm encountered an issue with the BoTorch library. "
-                "This is likely due to version compatibility. Trying with a different method."
-            )
-        else:
-            error_box.setInformativeText("The optimization algorithm encountered an error. Let's try a different approach.")
-            
         error_box.setDetailedText(error_details)
         error_box.exec()
 
@@ -686,7 +740,7 @@ def add_result_for_selected(self):
         print(f"Selected row: {row}")
         
         # Check if this is a separator row by checking column span
-        if self.experiment_table.columnSpan(row, 0) > 1:
+        if hasattr(self.experiment_table, 'columnSpan') and self.experiment_table.columnSpan(row, 0) > 1:
             QMessageBox.warning(self, "Warning", "You selected a round separator. Please select an experiment row.")
             return
             
@@ -708,7 +762,7 @@ def add_result_for_selected(self):
         print(f"Experiment ID: {exp_id+1}")
         
         # Make sure experiment exists in planned experiments
-        if exp_id < 0 or exp_id >= len(self.model.planned_experiments):
+        if not hasattr(self.model, 'planned_experiments') or exp_id < 0 or exp_id >= len(self.model.planned_experiments):
             QMessageBox.warning(self, "Warning", f"Experiment #{exp_id+1} doesn't exist in planned experiments.")
             return
             
@@ -753,8 +807,15 @@ def add_result_for_selected(self):
             print("Removed existing result")
             
         # Show dialog to input results
+        from .dialogs import ResultDialog
+        import datetime
+        
         dialog = ResultDialog(self, self.model, exp_id, exp_params)
         if dialog.exec() == QDialog.Accepted and dialog.result:
+            # Ensure we have a timestamp
+            if 'timestamp' not in dialog.result:
+                dialog.result['timestamp'] = datetime.datetime.now().isoformat()
+                
             # Add result to model
             self.model.experiments.append(dialog.result)
             print(f"Added new result: {dialog.result}")
@@ -765,19 +826,48 @@ def add_result_for_selected(self):
             dialog.result['score'] = score
             print(f"Calculated score: {score}")
             
+            # Make sure the surrogate cache is cleared to enable model retraining
+            if hasattr(self.model, 'clear_surrogate_cache'):
+                self.model.clear_surrogate_cache()
+            
             # Update experiment table and highlight result
             self.experiment_table.update_from_planned(self.model, self.round_start_indices)
             
-            # Update all result tables using the central update method
-            self.update_result_tables()
+            # Update results tables
+            if hasattr(self, 'best_table') and hasattr(self, 'n_best_spin'):
+                self.best_table.update_from_model(self.model, self.n_best_spin.value())
+                
+            if hasattr(self, 'all_results_table'):
+                self.all_results_table.update_from_model(self.model)
+                
+            # Update UI with current best score
+            if hasattr(self, 'best_result_label'):
+                best_exps = self.model.get_best_experiments(n=1)
+                if best_exps:
+                    best_exp = best_exps[0]
+                    best_score = best_exp.get('score', 0.0) * 100.0
+                    self.best_result_label.setText(f"{best_score:.2f}%")
             
             # Log success
             self.log(f" Added result for experiment #{exp_id+1} - Success")
+            
+            # Force result plots to update if visible
+            if hasattr(self, 'tab_widget') and self.tab_widget.currentIndex() == 3:  # Results tab
+                if hasattr(self, 'update_results_plot'):
+                    self.update_results_plot()
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()
         self.log(f" Failed to add result: {str(e)} - Error")
         print(f"Error details: {error_details}")
+        
+        # Show detailed error to user
+        error_box = QMessageBox(self)
+        error_box.setIcon(QMessageBox.Critical)
+        error_box.setWindowTitle("Error Adding Result")
+        error_box.setText(f"Failed to add result: {str(e)}")
+        error_box.setDetailedText(error_details)
+        error_box.exec()
 
 def new_project(self):
     confirm = QMessageBox.question(

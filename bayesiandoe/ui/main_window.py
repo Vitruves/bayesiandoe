@@ -9,7 +9,7 @@ import logging
 import datetime
 import random
 from scipy import stats
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QPoint, QRect
 from PySide6.QtGui import QFont, QPixmap, QImage, QAction, QColor
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QCheckBox, QRadioButton, QGroupBox, QHeaderView, QTableWidgetItem,
     QScrollArea, QFrame, QSizePolicy, QTextEdit, QMessageBox, QFileDialog,
     QSlider, QFormLayout, QGridLayout, QListWidget, QInputDialog,
-    QStatusBar, QProgressBar, QStackedWidget, QTableWidget, QDialog, QListWidgetItem
+    QStatusBar, QProgressBar, QStackedWidget, QTableWidget, QDialog, QListWidgetItem, QToolTip
 )
 
 from ..core import _calculate_parameter_distance
@@ -75,54 +75,66 @@ def lazy_import(module_name):
 class BayesianDOEApp(QMainWindow):
     def __init__(self):
         super().__init__()
+        
+        # Show splash screen immediately
+        self.splash = SplashScreen()
+        self.splash.show()
+        
+        # Process events immediately to ensure splash screen is displayed
+        QApplication.processEvents()
+        
+        # Create minimal components for initialization
         self.model = OptunaBayesianExperiment()
         self.current_round = 1
         self.round_start_indices = []
         self.working_directory = os.getcwd()
         
-        self.registry_manager = ChemicalRegistry()
-        self.registry_manager.initialize_registry()
-        self.registry = self.registry_manager.get_full_registry()
-        
-        self.experiment_spin = QSpinBox()
-        self.experiment_spin.setMinimum(1)
-        self.experiment_spin.setMaximum(1000)
-        self.experiment_spin.setValue(10)
-        
-        # Initialize core components first
-        self.log_display = LogDisplay()
-        
-        # Create UI skeleton
+        # Initialize basic UI
         self.setWindowTitle("Bayesian DOE - Chemical Reaction Optimizer")
         self.setMinimumSize(1200, 800)
         
-        # Add the n_initial_spin and n_next_spin attributes
+        # Initialize minimum required attributes
         self.n_initial_spin = None
         self.n_next_spin = None
-        
-        # Initialize suggestion time tracking
         self.model._suggestion_start_time = 0
-        
-        # Initialize planned_experiments to avoid None issues
         if not hasattr(self.model, 'planned_experiments'):
             self.model.planned_experiments = []
         
-        # Create basic UI
-        self.create_menu_bar()
-        self.create_status_bar()
-        
-        # Initialize central widget but defer tab creation
+        # Create basic UI skeleton
         central_widget = QWidget()
         main_layout = QVBoxLayout(central_widget)
         self.tab_widget = QTabWidget()
         main_layout.addWidget(self.tab_widget)
         self.setCentralWidget(central_widget)
         
-        # Schedule detailed UI initialization for after showing the main window
+        # Initialize core components first
+        self.log_display = LogDisplay()
+        
+        # Schedule heavy initialization for after splash screen is visible
+        QTimer.singleShot(50, self.init_heavy_components)
+        
+    def init_heavy_components(self):
+        """Initialize heavyweight components after splash screen is shown"""
+        # Registry initialization (can be slow)
+        self.registry_manager = ChemicalRegistry()
+        self.registry_manager.initialize_registry()
+        self.registry = self.registry_manager.get_full_registry()
+        
+        # Common UI elements
+        self.experiment_spin = QSpinBox()
+        self.experiment_spin.setMinimum(1)
+        self.experiment_spin.setMaximum(1000)
+        self.experiment_spin.setValue(10)
+        
+        # Create UI components that may take time
+        self.create_menu_bar()
+        self.create_status_bar()
+        
+        # Schedule UI initialization with progressive delays
         QTimer.singleShot(100, self.delayed_init_ui)
         
         self.log(" Application initialized")
-    
+        
     def delayed_init_ui(self):
         """Initialize UI components in a delayed manner"""
         # Initialize first tab immediately (most important for user)
@@ -130,10 +142,10 @@ class BayesianDOEApp(QMainWindow):
         setup_setup_tab(self)
         
         # Schedule remaining tabs with delays between them
-        QTimer.singleShot(200, lambda: self.init_tab_2())
-        QTimer.singleShot(300, lambda: self.init_tab_3())
-        QTimer.singleShot(400, lambda: self.init_tab_4())
-        QTimer.singleShot(500, lambda: self.init_tab_5())
+        QTimer.singleShot(100, lambda: self.init_tab_2())
+        QTimer.singleShot(200, lambda: self.init_tab_3())
+        QTimer.singleShot(300, lambda: self.init_tab_4())
+        QTimer.singleShot(400, lambda: self.init_tab_5())
         
         # Add tab change handler to update the UI when switching tabs
         self.tab_widget.currentChanged.connect(self.on_tab_changed)
@@ -142,6 +154,16 @@ class BayesianDOEApp(QMainWindow):
         self.setup_validated = False
         self.disable_tabs()
         self.on_tab_changed(0) # Ensure button state is correct initially
+        
+        # Show main window and hide splash when ready
+        QTimer.singleShot(100, self.finish_initialization)
+        
+    def finish_initialization(self):
+        """Final step to show main window and hide splash"""
+        self.show()
+        
+        # Allow more time for processing events
+        QTimer.singleShot(200, lambda: self.splash.close() if hasattr(self, 'splash') else None)
         
         self.log(" Application interface ready")
     
@@ -382,6 +404,25 @@ class BayesianDOEApp(QMainWindow):
                 update_results_plot(self)
                 update_best_results(self)
                 self.log(" Results visualizations refreshed - Success")
+            
+            # Add prediction of required experiments
+            if hasattr(self, 'results_prediction_label') and force_refresh:
+                try:
+                    target_score = 0.9  # 90% as default target
+                    prediction = self.model.estimate_required_experiments(target_score)
+                    
+                    if prediction['possible']:
+                        if prediction['estimate'] == 0:
+                            self.results_prediction_label.setText("✓ Target already achieved")
+                        else:
+                            range_text = f" (range: {prediction['range'][0]}-{prediction['range'][1]})"
+                            self.results_prediction_label.setText(
+                                f"~{prediction['estimate']} more experiments needed{range_text}")
+                    else:
+                        self.results_prediction_label.setText(
+                            f"⚠️ {prediction['message']}")
+                except Exception as e:
+                    self.results_prediction_label.setText("Could not estimate required experiments")
     
     def update_analysis_tab(self, force_refresh=False):
         """Update analysis tab contents with lazy imports and auto-refresh on tab click"""
@@ -478,3 +519,96 @@ class BayesianDOEApp(QMainWindow):
             import traceback
             print(f"Error updating result tables: {e}")
             print(traceback.format_exc())
+
+    def view_selected_round(self, selected_round):
+        """Switch the experiment table view to show a specific round"""
+        try:
+            if not hasattr(self, 'experiment_table'):
+                return
+            
+            if 1 <= selected_round <= self.current_round:
+                # Store previous round info
+                prev_round = getattr(self, 'view_round', self.current_round)
+                
+                # When leaving current round, make sure all changes are applied and saved
+                if hasattr(self, 'view_round') and self.view_round == self.current_round and selected_round != self.current_round:
+                    # Commit any pending changes in experiment table
+                    if hasattr(self.experiment_table, 'commit_pending_changes'):
+                        self.experiment_table.commit_pending_changes()
+                    
+                    # Log that we're saving the current state
+                    self.log(f" Saving current round {self.current_round} state")
+                
+                # Set new view round
+                self.view_round = selected_round
+                
+                # Log the round change
+                self.log(f" Viewing experiment round {selected_round}")
+                
+                # Update table to show selected round
+                if hasattr(self.experiment_table, 'filter_by_round'):
+                    self.experiment_table.filter_by_round = selected_round
+                    # Make sure round_start_indices is properly initialized
+                    if not hasattr(self, 'round_start_indices') or not self.round_start_indices:
+                        self.round_start_indices = []
+                        rounds_per_batch = 5
+                        for i in range(0, len(self.model.planned_experiments), rounds_per_batch):
+                            self.round_start_indices.append(i)
+                            
+                    # Update the table with the filtered view
+                    self.experiment_table.update_from_planned(self.model, self.round_start_indices)
+                
+                # Visual indicator for current view - make it obvious which round is being viewed
+                round_indicator = f"Round {selected_round}/{self.current_round}"
+                
+                # Update UI to indicate this is historical data
+                if selected_round < self.current_round:
+                    self.status_label.setText(f"Viewing historical data from {round_indicator} (read-only)")
+                    self.experiment_table.setEditTriggers(QTableWidget.NoEditTriggers)
+                    # Set a property to mark the table as read-only
+                    self.experiment_table.setProperty("read_only", True)
+                    # Add visual indication that we're in read-only mode
+                    self.experiment_table.setStyleSheet("""
+                        QTableWidget {
+                            background-color: #f8f8f8;
+                        }
+                        QTableWidget::item {
+                            border-bottom: 1px solid #e0e0e0;
+                        }
+                        QTableWidget::item:selected {
+                            background-color: rgba(200, 200, 200, 100);
+                        }
+                    """)
+                else:
+                    self.status_label.setText(f"Current experiment {round_indicator}")
+                    self.experiment_table.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed)
+                    # Clear the read-only property
+                    self.experiment_table.setProperty("read_only", False)
+                    # Reset styling for current round
+                    self.experiment_table.setStyleSheet("""
+                        QTableWidget::item:hover {
+                            background-color: rgba(240, 255, 240, 100);
+                            border: 1px solid #4CAF50;
+                        }
+                        QTableWidget::item:selected {
+                            background-color: rgba(200, 255, 200, 100);
+                        }
+                    """)
+                
+                # Show a brief notification to confirm the round change
+                if hasattr(self, 'tab_widget') and prev_round != selected_round:
+                    current_tab = self.tab_widget.currentWidget()
+                    position = QPoint(current_tab.width() // 2, current_tab.height() // 10)
+                    QToolTip.showText(
+                        current_tab.mapToGlobal(position),
+                        f"Now viewing Round {selected_round}" + 
+                        (" (read-only)" if selected_round < self.current_round else ""),
+                        current_tab,
+                        QRect(),
+                        3000
+                    )
+        except Exception as e:
+            import traceback
+            print(f"Error in view_selected_round: {e}")
+            print(traceback.format_exc())
+            self.log(f" Error switching to round {selected_round}: {str(e)}")

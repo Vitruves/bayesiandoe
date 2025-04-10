@@ -694,6 +694,16 @@ class OptunaBayesianExperiment:
         
         return params
     
+    def _get_total_parameter_dims(self):
+        """Calculate total dimensionality of parameter space accounting for categorical one-hot encoding"""
+        total_dims = 0
+        for name, param in self.parameters.items():
+            if param.param_type == "categorical":
+                total_dims += len(param.choices)  # One-hot encoding
+            else:
+                total_dims += 1  # Continuous or discrete parameters are 1D
+        return total_dims
+    
     def _extract_normalized_features_and_targets(self):
         """Extract normalized features and target values for model training"""
         if not self.experiments:
@@ -843,10 +853,16 @@ class OptunaBayesianExperiment:
         
     def suggest_experiments(self, n_suggestions=5):
         """
-        DEPRECATED: This method is now replaced by direct calls to specific suggestion methods.
-        You should use _suggest_with_botorch, _suggest_random, _suggest_with_lhs, etc. directly.
+        Suggest experiments using the selected design method.
         
-        This method is kept for backward compatibility but may be removed in future versions.
+        This function ensures all suggested experiments have a consistent structure
+        with parameters stored under the 'params' key.
+        
+        Args:
+            n_suggestions (int): Number of experiments to suggest
+            
+        Returns:
+            List of experiment dictionaries with 'params' key
         """
         # Set start time for tracking
         import time
@@ -871,19 +887,30 @@ class OptunaBayesianExperiment:
             # Default to random
             print(f"Unknown design method '{method}', using random sampling")
             suggestions = self._suggest_random(n_suggestions)
-            
-        # Store in planned experiments (defensive check first)
-        if not hasattr(self, 'planned_experiments'):
-            self.planned_experiments = []
-            
-        # Add to planned experiments
-        self.planned_experiments.extend(suggestions)
+        
+        # Ensure each suggestion has the proper structure with 'params' key
+        structured_suggestions = []
+        for suggestion in suggestions:
+            # Check if the suggestion already has a proper structure
+            if isinstance(suggestion, dict) and 'params' in suggestion:
+                structured_suggestions.append(suggestion)
+            else:
+                # Create a new dict with proper structure
+                structured_suggestion = {'params': {}}
+                
+                # If suggestion is a dict, copy parameters
+                if isinstance(suggestion, dict):
+                    for key, value in suggestion.items():
+                        if key in self.parameters:
+                            structured_suggestion['params'][key] = value
+                
+                structured_suggestions.append(structured_suggestion)
         
         # Log timing
         suggestion_time = time.time() - self._suggestion_start_time
-        print(f"Generated {len(suggestions)} suggestions in {suggestion_time:.2f}s")
+        print(f"Generated {len(structured_suggestions)} suggestions in {suggestion_time:.2f}s")
         
-        return suggestions
+        return structured_suggestions
 
     def _apply_parameter_linking(self, suggestions):
         """Apply parameter linking to improve suggestions based on best results."""
@@ -1725,3 +1752,146 @@ class OptunaBayesianExperiment:
         # Force garbage collection
         import gc
         gc.collect()
+
+    def estimate_required_experiments(self, target_score=0.9, confidence=0.8):
+        """
+        Estimate number of additional experiments needed to reach target score
+        
+        Args:
+            target_score: Target score to reach (0.0-1.0)
+            confidence: Confidence level for the estimate (0.0-1.0)
+            
+        Returns:
+            dict with keys:
+                'estimate': Most likely estimate of required experiments
+                'range': (min, max) range of required experiments
+                'current_best': Current best score
+                'possible': Whether target appears achievable
+        """
+        if not self.experiments or len(self.experiments) < 3:
+            return {
+                'estimate': None,
+                'range': (None, None),
+                'current_best': 0.0,
+                'possible': True,
+                'message': "Need at least 3 experiments to estimate"
+            }
+        
+        # Get progress so far
+        scores = []
+        for exp in self.experiments:
+            score = 0
+            weight_sum = 0
+            if 'score' in exp and exp['score'] is not None:
+                score = exp['score']
+            else:
+                for obj in self.objectives:
+                    if obj in exp.get('results', {}) and exp['results'][obj] is not None:
+                        weight = self.objective_weights.get(obj, 1.0)
+                        score += exp['results'][obj] * weight
+                        weight_sum += weight
+                
+                if weight_sum > 0:
+                    score = score / weight_sum
+            
+            scores.append(score)
+        
+        best_scores = np.maximum.accumulate(scores)
+        current_best = best_scores[-1]
+        
+        # Skip if target already reached
+        if current_best >= target_score:
+            return {
+                'estimate': 0,
+                'range': (0, 0),
+                'current_best': current_best,
+                'possible': True,
+                'message': "Target already achieved"
+            }
+        
+        # Fit convergence model
+        try:
+            from scipy.optimize import curve_fit
+            import numpy as np
+            
+            # Define convergence model
+            def convergence_model(x, a, b, c):
+                """Model of form: a * (1 - exp(-b * x)) + c"""
+                return a * (1 - np.exp(-b * x)) + c
+                
+            x = np.array(range(1, len(best_scores) + 1))
+            
+            # Estimate initial parameters
+            init_value = best_scores[0]
+            final_value = best_scores[-1]
+            growth_rate = 0.1
+            
+            p0 = [final_value - init_value, growth_rate, init_value]
+            bounds = ([0, 1e-6, 0], [1.0, 1.0, 1.0])
+            
+            # Fit model
+            popt, pcov = curve_fit(convergence_model, x, best_scores, p0=p0,
+                                  bounds=bounds, maxfev=10000)
+            a, b, c = popt
+            
+            # Calculate asymptotic maximum
+            asymptotic_max = a + c
+            
+            # Check if target is achievable
+            if asymptotic_max < target_score:
+                return {
+                    'estimate': float('inf'),
+                    'range': (float('inf'), float('inf')),
+                    'current_best': current_best,
+                    'possible': False,
+                    'message': f"Target may not be achievable. Projected maximum: {asymptotic_max:.1%}"
+                }
+            
+            # Calculate required experiments
+            from math import log
+            if a > 0:
+                required_x = -log(1 - (target_score - c) / a) / b
+                required_additional = max(0, int(np.ceil(required_x - len(best_scores))))
+                
+                # Calculate confidence intervals
+                perr = np.sqrt(np.diag(pcov))
+                upper_params = popt + perr * confidence
+                lower_params = popt - perr * confidence
+                
+                # Use reasonable bounds
+                upper_params = np.maximum(upper_params, [1e-6, 1e-6, 0])
+                
+                # Calculate range
+                if upper_params[0] > 0:
+                    upper_required = -log(1 - (target_score - upper_params[2]) / upper_params[0]) / upper_params[1]
+                    upper_additional = max(0, int(np.ceil(upper_required - len(best_scores))))
+                else:
+                    upper_additional = float('inf')
+                    
+                if lower_params[0] > 0 and target_score > lower_params[2]:
+                    lower_required = -log(1 - (target_score - lower_params[2]) / lower_params[0]) / lower_params[1]
+                    lower_additional = max(0, int(np.ceil(lower_required - len(best_scores))))
+                else:
+                    lower_additional = required_additional * 2
+                
+                # Return estimate with range
+                return {
+                    'estimate': required_additional,
+                    'range': (lower_additional, upper_additional),
+                    'current_best': current_best,
+                    'possible': True,
+                    'message': f"Need ~{required_additional} more experiments (range: {lower_additional}-{upper_additional})"
+                }
+        except Exception as e:
+            import traceback
+            print(f"Error estimating required experiments: {e}")
+            print(traceback.format_exc())
+        
+        # Fallback to simple estimate
+        return {
+            'estimate': len(best_scores),
+            'range': (len(best_scores) // 2, len(best_scores) * 2),
+            'current_best': current_best,
+            'possible': True,
+            'message': "Rough estimate based on limited data"
+        }

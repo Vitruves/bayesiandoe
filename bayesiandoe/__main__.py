@@ -10,6 +10,9 @@ def main():
     # Create application before splash screen to ensure Qt is initialized
     app = QApplication(sys.argv)
     
+    # Apply global stylesheet for consistent visuals
+    app.setStyle('Fusion')
+    
     # Import has to be done after QApplication to avoid issues with PySide
     from bayesiandoe.ui.widgets import SplashScreen
     
@@ -17,29 +20,48 @@ def main():
     splash = SplashScreen()
     splash.show()
     
-    # Process events to ensure splash shows immediately
+    # Force immediate processing for splash screen
     app.processEvents()
     
+    # Use Metal renderer on macOS if available
+    if sys.platform == 'darwin':
+        try:
+            from PySide6.QtGui import QSurfaceFormat
+            format = QSurfaceFormat()
+            format.setRenderableType(QSurfaceFormat.OpenGL)
+            QSurfaceFormat.setDefaultFormat(format)
+        except:
+            pass
+    
     # Use a timer to delay importing the main window
-    # This allows the splash screen to be displayed immediately
+    # This gives time for the splash screen to be displayed
     def load_main_window():
-        # Import main window after showing splash to make loading visible
+        # Import main window after showing splash
         from bayesiandoe.ui.main_window import BayesianDOEApp
         
-        # Create main window
+        # Create main window (hidden initially)
         main_window = BayesianDOEApp()
         
-        # When splash finishes, show main window
-        def show_main_window():
-            main_window.show()
-            main_window.raise_()
-            main_window.activateWindow()
+        # Override splash screen's close method to properly transition
+        original_close = splash.close
         
-        # Connect splash finish to main window display
-        splash.close = lambda: (super(type(splash), splash).close(), show_main_window())
+        def on_splash_finished():
+            # Make sure splash is fully closed
+            if hasattr(original_close, '__call__'):
+                original_close()
+            
+            # Show main window with a slight delay to ensure splash is gone
+            QTimer.singleShot(100, lambda: (
+                main_window.show(),
+                main_window.raise_(),
+                main_window.activateWindow()
+            ))
+        
+        # Replace splash close with our transition function
+        splash.close = on_splash_finished
     
-    # Use a short delay to allow splash screen to render first
-    QTimer.singleShot(50, load_main_window)
+    # Use a short delay to ensure splash screen renders first
+    QTimer.singleShot(10, load_main_window)
     
     sys.exit(app.exec())
 
